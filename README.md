@@ -6,4 +6,3 @@ Backend:
 
 Frontend:
 - `localhost:5173`
-
