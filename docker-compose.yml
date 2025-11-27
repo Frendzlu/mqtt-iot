@@ -1,12 +1,14 @@
 services:
 
   mosquitto:
-    image: eclipse-mosquitto:2
+    build: ./mosquitto
     container_name: mosquitto
+    environment:
+      - MOSQ_USER=adm
+      - MOSQ_PASS=sdf
     volumes:
-      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf
-      - ./mosquitto/passwd:/mosquitto/config/passwd
-      - ./mosquitto/acl:/mosquitto/config/acl
+      - ./mosquitto/config:/mosquitto/config
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
       - ./mosquitto/log:/mosquitto/log
     ports:
       - "1883:1883"
@@ -19,10 +21,11 @@ services:
     environment:
       - MOSQUITTO_PASSWD=/mosquitto/config/passwd
       - MOSQUITTO_ACL=/mosquitto/config/acl
+      - BROKER_USER=${MOSQ_USER:-backend-manager}
+      - BROKER_PASS=${MOSQ_PASS:-supersecret}
     volumes:
       - ./mosquitto:/mosquitto
-      - ./mosquitto/passwd:/mosquitto/config/passwd
-      - ./mosquitto/acl:/mosquitto/config/acl
+      - /var/run/docker.sock:/var/run/docker.sock
     ports:
       - "3001:3001"
     depends_on:

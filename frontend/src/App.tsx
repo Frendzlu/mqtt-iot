@@ -10,20 +10,44 @@ export default function App() {
     const [backendUrl, setBackendUrl] = useState("http://localhost:3001");
     const [username, setUsername] = useState("");
     const [uuid, setUuid] = useState("");
+    const [password, setPassword] = useState("");
     const [devices, setDevices] = useState<Device[]>([]);
     const [newDeviceName, setNewDeviceName] = useState("");
     const [message, setMessage] = useState("");
     const [selectedDevice, setSelectedDevice] = useState<string | null>(null);
+    const [sendToAll, setSendToAll] = useState(false);
     const [telemetry, setTelemetry] = useState<string[]>([]);
     const [socket, setSocket] = useState<Socket | null>(null);
 
-    // Create a new user
-    const createUser = async () => {
-        const res = await fetch(`${backendUrl}/create-user`, {
+    // Register a new user (creates MQTT passwd + ACL on the backend)
+    const register = async () => {
+        if (!username || !password) return alert("username and password required");
+        const res = await fetch(`${backendUrl}/register`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ username }),
+            body: JSON.stringify({ username, password }),
         });
+        if (!res.ok) {
+            const err = await res.json();
+            return alert("Register failed: " + (err.error || JSON.stringify(err)));
+        }
+        const data = await res.json();
+        setUuid(data.uuid);
+        fetchDevices(data.uuid);
+        startTelemetry(data.uuid);
+    };
+
+    const login = async () => {
+        if (!username || !password) return alert("username and password required");
+        const res = await fetch(`${backendUrl}/login`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username, password }),
+        });
+        if (!res.ok) {
+            const err = await res.json();
+            return alert("Login failed: " + (err.error || JSON.stringify(err)));
+        }
         const data = await res.json();
         setUuid(data.uuid);
         fetchDevices(data.uuid);
@@ -53,10 +77,13 @@ export default function App() {
     // Publish a message
     const publishMessage = async () => {
         if (!message) return;
+        const body: any = { userUuid: uuid, message };
+        if (!sendToAll && selectedDevice) body.deviceId = selectedDevice;
+
         await fetch(`${backendUrl}/publish`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ userUuid: uuid, deviceId: selectedDevice, message }),
+            body: JSON.stringify(body),
         });
         setMessage("");
     };
@@ -112,8 +139,18 @@ export default function App() {
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
                 />
-                <button onClick={createUser} style={{ marginLeft: "10px" }}>
-                    Create User
+                <input
+                    type="password"
+                    placeholder="Password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    style={{ marginLeft: "10px" }}
+                />
+                <button onClick={register} style={{ marginLeft: "10px" }}>
+                    Register
+                </button>
+                <button onClick={login} style={{ marginLeft: "10px" }}>
+                    Login
                 </button>
             </div>
 
@@ -122,6 +159,12 @@ export default function App() {
                     <p>
                         <strong>User UUID:</strong> {uuid}
                     </p>
+
+                    <div style={{ marginBottom: "10px" }}>
+                        <strong>MQTT Credentials:</strong>
+                        <div>Username: <code>{uuid}</code></div>
+                        <div>Password: <code>{password ? password : "(use password you registered with)"}</code></div>
+                    </div>
 
                     <h3>Devices</h3>
                     <ul>
@@ -132,7 +175,7 @@ export default function App() {
                                     name="selectedDevice"
                                     value={d.id}
                                     checked={selectedDevice === d.id}
-                                    onChange={() => setSelectedDevice(d.id)}
+                                    onChange={() => { setSelectedDevice(d.id); setSendToAll(false); }}
                                 />{" "}
                                 {d.name} ({d.id})
                             </li>
@@ -147,6 +190,20 @@ export default function App() {
                     <button onClick={addDevice} style={{ marginLeft: "10px" }}>
                         Add Device
                     </button>
+
+                    <div style={{ marginTop: "12px" }}>
+                        <label>
+                            <input
+                                type="checkbox"
+                                checked={sendToAll}
+                                onChange={(e) => {
+                                    setSendToAll(e.target.checked);
+                                    if (e.target.checked) setSelectedDevice(null);
+                                }}
+                            />{' '}
+                            Send to all devices
+                        </label>
+                    </div>
 
                     <h3 style={{ marginTop: "20px" }}>Publish Message</h3>
                     <textarea
