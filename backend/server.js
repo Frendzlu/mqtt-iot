@@ -42,40 +42,36 @@ pool.on("error", (err) => {
     console.error("[DB] Unexpected error on idle client", err);
 });
 
-// --- Persistent storage for users ---
-const USERS_FILE = process.env.USERS_FILE || "/mosquitto/data/users.json";
-
-function ensureUsersFile() {
+// --- Load users from database at startup ---
+async function loadUsersFromDB() {
     try {
-        const dir = path.dirname(USERS_FILE);
-        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-        if (!fs.existsSync(USERS_FILE)) fs.writeFileSync(USERS_FILE, JSON.stringify([]));
-    } catch (err) {
-        console.error("Could not ensure users file:", err);
-    }
-}
+        const result = await pool.query('SELECT uuid, username, password_hash FROM users');
+        const users = result.rows.map(row => ({
+            uuid: row.uuid,
+            username: row.username,
+            passwordHash: row.password_hash,
+            devices: []
+        }));
 
-function loadUsers() {
-    ensureUsersFile();
-    try {
-        const data = fs.readFileSync(USERS_FILE, "utf8");
-        return JSON.parse(data || "[]");
+        // Load devices for each user
+        const devicesResult = await pool.query('SELECT id, user_uuid, name FROM devices');
+        for (const deviceRow of devicesResult.rows) {
+            const user = users.find(u => u.uuid === deviceRow.user_uuid);
+            if (user) {
+                user.devices.push({ id: deviceRow.id, name: deviceRow.name });
+            }
+        }
+
+        console.log(`[STARTUP] Loaded ${users.length} users with ${devicesResult.rows.length} devices from database`);
+        return users;
     } catch (err) {
-        console.error("Failed to load users file:", err);
+        console.error('[STARTUP] Failed to load users from database:', err);
         return [];
     }
 }
 
-function saveUsers(users) {
-    try {
-        fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2));
-    } catch (err) {
-        console.error("Failed to save users file:", err);
-    }
-}
-
-// in-memory map for quick access (loaded at start)
-const users = new Map(loadUsers().map((u) => [u.uuid, u]));
+// in-memory map for quick access (loaded at start from database)
+let users = new Map();
 
 // --- MQTT client ---
 const mqttClient = mqtt.connect("mqtt://mosquitto:1883", {
@@ -115,13 +111,13 @@ mqttClient.on("message", (topic, message) => {
             storeTelemetry(userUuid, deviceId, deviceName, msg)
                 .then((result) => {
                     console.log(`[TELEMETRY] Stored ${result.recordCount} reading(s) for ${deviceName}`);
-                    
+
                     // Broadcast telemetry to frontend via Socket.IO
-                    io.to(userUuid).emit("telemetry", { 
-                        deviceId, 
-                        deviceName, 
-                        message: msg, 
-                        timestamp: new Date().toISOString() 
+                    io.to(userUuid).emit("telemetry", {
+                        deviceId,
+                        deviceName,
+                        message: msg,
+                        timestamp: new Date().toISOString()
                     });
 
                     // Send acknowledgment command to device
@@ -140,7 +136,7 @@ mqttClient.on("message", (topic, message) => {
                 })
                 .catch((err) => {
                     console.error("[DB] Failed to store telemetry:", err);
-                    
+
                     // Send failure acknowledgment
                     try {
                         const data = JSON.parse(msg);
@@ -192,7 +188,7 @@ mqttClient.on("message", (topic, message) => {
             handleImageMessage(userUuid, deviceId, deviceName, msg)
                 .then((result) => {
                     console.log(`[IMAGE] Stored image from ${deviceName}: ${result.imageId}`);
-                    
+
                     // Broadcast image notification to frontend
                     io.to(userUuid).emit("image", {
                         deviceId,
@@ -248,7 +244,7 @@ async function storeTelemetry(userUuid, deviceId, deviceName, message) {
             // Batch telemetry: value is array of [timestamp, value] tuples
             for (const entry of data.value) {
                 if (!Array.isArray(entry) || entry.length < 2) continue;
-                
+
                 const [timestamp, value] = entry;
                 const parsedValue = typeof value === 'number' ? value : parseFloat(value);
                 const tsDate = new Date(timestamp);
@@ -262,7 +258,7 @@ async function storeTelemetry(userUuid, deviceId, deviceName, message) {
         } else {
             // Single telemetry reading
             const parsedValue = typeof data.value === 'number' ? data.value : parseFloat(data.value);
-            
+
             await pool.query(
                 `INSERT INTO telemetry (user_uuid, device_id, device_name, sensor_name, message, value, unit, timestamp, message_id) 
                  VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8)`,
@@ -287,7 +283,15 @@ async function storeAlarm(alarm) {
 }
 
 // Handle image messages
-// Expected format: {"imageId": "img-123", "messageId": "msg-456", "data": "base64...", "metadata": {...}}
+// Expected format: {"imageId": "img-123", "messageId": "msg-456", "imageData": "base64...", "metadata": {...}}
+const IMAGES_DIR = process.env.IMAGES_DIR || '/app/images';
+
+// Ensure images directory exists
+if (!fs.existsSync(IMAGES_DIR)) {
+    fs.mkdirSync(IMAGES_DIR, { recursive: true });
+    console.log(`[IMAGES] Created images directory: ${IMAGES_DIR}`);
+}
+
 async function handleImageMessage(userUuid, deviceId, deviceName, message) {
     let data;
     try {
@@ -297,25 +301,39 @@ async function handleImageMessage(userUuid, deviceId, deviceName, message) {
         throw new Error('Image message must be valid JSON');
     }
 
-    if (!data.imageId || !data.data) {
-        throw new Error('Missing required fields: imageId and data');
+    if (!data.imageId || !data.imageData) {
+        throw new Error('Missing required fields: imageId and imageData');
     }
 
     const imageId = data.imageId;
     const messageId = data.messageId || null;
-    const imageData = data.data; // Base64 encoded image
+    const imageDataBase64 = data.imageData; // Base64 encoded image
     const metadata = data.metadata || {};
 
     try {
+        // Generate unique filename
+        const timestamp = Date.now();
+        const extension = metadata.format || 'png';
+        const filename = `${userUuid}_${deviceId}_${imageId}_${timestamp}.${extension}`;
+        const filepath = path.join(IMAGES_DIR, filename);
+
+        // Decode base64 and save to file
+        const imageBuffer = Buffer.from(imageDataBase64, 'base64');
+        fs.writeFileSync(filepath, imageBuffer);
+
+        const fileSize = imageBuffer.length;
+        console.log(`[IMAGE] Saved image to file: ${filename} (${fileSize} bytes)`);
+
+        // Store only metadata and file path in database
         await pool.query(
-            `INSERT INTO images (user_uuid, device_id, device_name, image_id, image_data, metadata, timestamp, message_id) 
-             VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7)`,
-            [userUuid, deviceId, deviceName, imageId, imageData, JSON.stringify(metadata), messageId]
+            `INSERT INTO images (user_uuid, device_id, device_name, image_id, file_path, file_size, metadata, timestamp, message_id) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8)`,
+            [userUuid, deviceId, deviceName, imageId, filename, fileSize, JSON.stringify(metadata), messageId]
         );
 
-        return { success: true, imageId, messageId, metadata };
+        return { success: true, imageId, messageId, metadata, filename, fileSize };
     } catch (err) {
-        console.error('[IMAGE] Database error:', err);
+        console.error('[IMAGE] Error saving image:', err);
         throw err;
     }
 }
@@ -348,9 +366,21 @@ app.post("/register", async (req, res) => {
 
     const uuid = uuidv4();
     const passwordHash = bcrypt.hashSync(password, 10);
-    const user = { username, uuid, passwordHash, devices: [] };
-    users.set(uuid, user);
-    saveUsers(Array.from(users.values()));
+
+    try {
+        // Save to database
+        await pool.query(
+            'INSERT INTO users (uuid, username, password_hash) VALUES ($1, $2, $3)',
+            [uuid, username, passwordHash]
+        );
+
+        // Add to in-memory map
+        const user = { username, uuid, passwordHash, devices: [] };
+        users.set(uuid, user);
+    } catch (err) {
+        console.error('[DB] Failed to create user:', err);
+        return res.status(500).json({ error: 'Database error', details: String(err) });
+    }
 
     // Add to mosquitto passwd using mosquitto_passwd (installed in backend image)
     const passwdPath = process.env.MOSQUITTO_PASSWD || "/mosquitto/config/passwd";
@@ -434,7 +464,7 @@ app.get("/devices/:uuid", (req, res) => {
     res.json(user.devices);
 });
 
-app.post("/add-device", (req, res) => {
+app.post("/add-device", async (req, res) => {
     const { userUuid, deviceName } = req.body;
     if (!deviceName) return res.status(400).json({ error: "Device name required" });
 
@@ -442,11 +472,22 @@ app.post("/add-device", (req, res) => {
     if (!user) return res.status(404).json({ error: "User not found" });
 
     const device = { id: uuidv4(), name: deviceName };
-    user.devices.push(device);
-    // persist devices to users file so devices survive restarts
-    saveUsers(Array.from(users.values()));
 
-    res.json(device);
+    try {
+        // Save to database
+        await pool.query(
+            'INSERT INTO devices (id, user_uuid, name) VALUES ($1, $2, $3)',
+            [device.id, userUuid, deviceName]
+        );
+
+        // Add to in-memory user
+        user.devices.push(device);
+
+        res.json(device);
+    } catch (err) {
+        console.error('[DB] Failed to create device:', err);
+        return res.status(500).json({ error: 'Database error', details: String(err) });
+    }
 });
 
 app.post("/publish", (req, res) => {
@@ -603,14 +644,14 @@ app.post("/alarms/:alarmId/acknowledge", async (req, res) => {
 });
 
 // Get images for a device
+// Get list of images (metadata only)
 app.get("/images/:userUuid/:deviceId", async (req, res) => {
     const { userUuid, deviceId } = req.params;
     const limit = parseInt(req.query.limit || "20");
 
     try {
         const result = await pool.query(
-            `SELECT id, image_id, device_name, metadata, timestamp, message_id,
-             LENGTH(image_data) as size
+            `SELECT id, image_id, device_name, file_path, file_size, metadata, timestamp, message_id
              FROM images 
              WHERE user_uuid = $1 AND device_id = $2
              ORDER BY timestamp DESC 
@@ -621,6 +662,45 @@ app.get("/images/:userUuid/:deviceId", async (req, res) => {
     } catch (err) {
         console.error("[DB] Error fetching images:", err);
         res.status(500).json({ error: "Database error" });
+    }
+});
+
+// Serve actual image file
+app.get("/images/:userUuid/:deviceId/:imageId/file", async (req, res) => {
+    const { userUuid, deviceId, imageId } = req.params;
+
+    try {
+        const result = await pool.query(
+            `SELECT file_path, metadata FROM images 
+             WHERE user_uuid = $1 AND device_id = $2 AND image_id = $3
+             ORDER BY timestamp DESC
+             LIMIT 1`,
+            [userUuid, deviceId, imageId]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: "Image not found" });
+        }
+
+        const { file_path, metadata } = result.rows[0];
+
+        if (!file_path) {
+            return res.status(404).json({ error: "Image file path not available (legacy image)" });
+        }
+
+        const filepath = path.join(IMAGES_DIR, file_path);
+
+        if (!fs.existsSync(filepath)) {
+            return res.status(404).json({ error: "Image file not found on disk" });
+        }
+
+        // Set content type based on metadata
+        const contentType = metadata?.format ? `image/${metadata.format}` : 'image/png';
+        res.setHeader('Content-Type', contentType);
+        res.sendFile(filepath);
+    } catch (err) {
+        console.error("[API] Error serving image:", err);
+        res.status(500).json({ error: "Server error" });
     }
 });
 
@@ -635,7 +715,7 @@ app.get("/images/:userUuid/:deviceId/:imageId", async (req, res) => {
              WHERE user_uuid = $1 AND device_id = $2 AND image_id = $3`,
             [userUuid, deviceId, imageId]
         );
-        
+
         if (result.rows.length === 0) {
             return res.status(404).json({ error: "Image not found" });
         }
@@ -669,4 +749,10 @@ io.on("connection", (socket) => {
 });
 
 const PORT = process.env.PORT || 3001;
-httpServer.listen(PORT, () => console.log(`Backend running on port ${PORT}`));
+
+// Initialize users from database before starting server
+(async () => {
+    const usersArray = await loadUsersFromDB();
+    users = new Map(usersArray.map((u) => [u.uuid, u]));
+    httpServer.listen(PORT, () => console.log(`Backend running on port ${PORT}`));
+})();

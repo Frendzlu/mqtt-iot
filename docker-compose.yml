@@ -4,9 +4,9 @@ services:
     image: postgres:16-alpine
     container_name: postgres
     environment:
-      - POSTGRES_USER=mqtt_user
-      - POSTGRES_PASSWORD=mqtt_pass
-      - POSTGRES_DB=mqtt_db
+      - POSTGRES_USER=${DB_USER}
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+      - POSTGRES_DB=${DB_NAME}
     volumes:
       - ./postgres-data:/var/lib/postgresql/data
       - ./sql/init.sql:/docker-entrypoint-initdb.d/init.sql
@@ -14,7 +14,7 @@ services:
       - "5432:5432"
     restart: always
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U mqtt_user -d mqtt_db" ]
+      test: [ "CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}" ]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -23,8 +23,8 @@ services:
     build: ./mosquitto
     container_name: mosquitto
     environment:
-      - MOSQ_USER=backend-manager
-      - MOSQ_PASS=supersecret
+      - MOSQ_USER=${MOSQ_USER}
+      - MOSQ_PASS=${MOSQ_PASS}
     volumes:
       - mosquitto_data:/mosquitto/config
       - mosquitto_log:/mosquitto/log
@@ -39,18 +39,20 @@ services:
     environment:
       - MOSQUITTO_PASSWD=/mosquitto/config/passwd
       - MOSQUITTO_ACL=/mosquitto/config/acl
-      - BROKER_USER=backend-manager
-      - BROKER_PASS=supersecret
-      - DB_HOST=postgres
-      - DB_PORT=5432
-      - DB_USER=mqtt_user
-      - DB_PASSWORD=mqtt_pass
-      - DB_NAME=mqtt_db
+      - BROKER_USER=${BROKER_USER}
+      - BROKER_PASS=${BROKER_PASS}
+      - DB_HOST=${DB_HOST}
+      - DB_PORT=${DB_PORT}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_NAME=${DB_NAME}
+      - IMAGES_DIR=/app/images
     volumes:
       - mosquitto_data:/mosquitto/config
       - /var/run/docker.sock:/var/run/docker.sock
+      - images_storage:/app/images
     ports:
-      - "3001:3001"
+      - "${PORT}:3001"
     depends_on:
       postgres:
         condition: service_healthy
@@ -61,6 +63,8 @@ services:
   frontend:
     build: ./frontend
     container_name: frontend
+    environment:
+      - VITE_BACKEND_URL=${VITE_BACKEND_URL}
     ports:
       - "5173:80"
     depends_on:
@@ -70,3 +74,4 @@ services:
 volumes:
   mosquitto_data:
   mosquitto_log:
+  images_storage:

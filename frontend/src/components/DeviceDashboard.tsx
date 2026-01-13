@@ -23,6 +23,17 @@ type SensorInfo = {
     last_reading: string;
 };
 
+type ImageData = {
+    id: number;
+    device_id: string;
+    device_name: string;
+    image_id: string;
+    file_path: string;
+    file_size: number;
+    metadata: any;
+    timestamp: string;
+};
+
 type Props = {
     device: Device;
     userUuid: string;
@@ -36,11 +47,17 @@ export default function DeviceDashboard({ device, userUuid, backendUrl }: Props)
     const [command, setCommand] = useState("");
     const [loading, setLoading] = useState(false);
     const [timeRange, setTimeRange] = useState(24);
+    const [images, setImages] = useState<ImageData[]>([]);
+    const [selectedImage, setSelectedImage] = useState<ImageData | null>(null);
 
     useEffect(() => {
         fetchSensors();
         fetchTelemetry();
-        const interval = setInterval(fetchTelemetry, 5000); // Refresh every 5 seconds
+        fetchImages();
+        const interval = setInterval(() => {
+            fetchTelemetry();
+            fetchImages();
+        }, 5000); // Refresh every 5 seconds
         return () => clearInterval(interval);
     }, [device.id, timeRange, selectedSensor]);
 
@@ -65,6 +82,17 @@ export default function DeviceDashboard({ device, userUuid, backendUrl }: Props)
             setTelemetry(data.reverse()); // Reverse to show oldest first for chart
         } catch (err) {
             console.error("Failed to fetch telemetry:", err);
+        }
+    };
+
+    const fetchImages = async () => {
+        try {
+            const res = await fetch(`${backendUrl}/images/${userUuid}/${device.id}?limit=20`);
+            if (!res.ok) throw new Error('Failed to fetch images');
+            const data = await res.json();
+            setImages(data);
+        } catch (err) {
+            console.error("Failed to fetch images:", err);
         }
     };
 
@@ -297,6 +325,109 @@ export default function DeviceDashboard({ device, userUuid, backendUrl }: Props)
                         ))}
                         {telemetry.length === 0 && <p className="no-data">No messages yet</p>}
                     </div>
+                </div>
+
+                {/* Images Card */}
+                <div className="card images-card" style={{ gridColumn: '1 / -1' }}>
+                    <h3>📷 Images ({images.length})</h3>
+                    {images.length > 0 ? (
+                        <div>
+                            <div className="images-grid" style={{
+                                display: 'grid',
+                                gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
+                                gap: '16px',
+                                marginBottom: '20px'
+                            }}>
+                                {images.map((img) => (
+                                    <div
+                                        key={img.id}
+                                        className="image-thumbnail"
+                                        style={{
+                                            border: selectedImage?.id === img.id ? '3px solid #4f46e5' : '1px solid #e0e0e0',
+                                            borderRadius: '8px',
+                                            padding: '8px',
+                                            cursor: 'pointer',
+                                            transition: 'transform 0.2s',
+                                        }}
+                                        onClick={() => setSelectedImage(img)}
+                                        onMouseEnter={(e) => e.currentTarget.style.transform = 'scale(1.05)'}
+                                        onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1)'}
+                                    >
+                                        <img
+                                            src={`${backendUrl}/images/${userUuid}/${device.id}/${img.image_id}/file`}
+                                            alt={img.image_id}
+                                            style={{
+                                                width: '100%',
+                                                height: '150px',
+                                                objectFit: 'cover',
+                                                borderRadius: '4px',
+                                            }}
+                                        />
+                                        <div style={{ marginTop: '8px', fontSize: '12px' }}>
+                                            <div style={{ fontWeight: 'bold' }}>{img.image_id}</div>
+                                            <div style={{ color: '#666' }}>
+                                                {new Date(img.timestamp).toLocaleString()}
+                                            </div>
+                                            {img.metadata && (
+                                                <div style={{ color: '#888', fontSize: '11px' }}>
+                                                    {img.metadata.width}x{img.metadata.height} · {(img.file_size / 1024).toFixed(1)}KB
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+
+                            {/* Selected Image Detail View */}
+                            {selectedImage && (
+                                <div style={{
+                                    border: '2px solid #4f46e5',
+                                    borderRadius: '8px',
+                                    padding: '16px',
+                                    backgroundColor: '#f9fafb',
+                                }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                                        <h4 style={{ margin: 0 }}>📷 {selectedImage.image_id}</h4>
+                                        <button
+                                            onClick={() => setSelectedImage(null)}
+                                            style={{
+                                                background: 'none',
+                                                border: 'none',
+                                                fontSize: '20px',
+                                                cursor: 'pointer',
+                                                color: '#666'
+                                            }}
+                                        >×</button>
+                                    </div>
+                                    <img
+                                        src={`${backendUrl}/images/${userUuid}/${device.id}/${selectedImage.image_id}/file`}
+                                        alt={selectedImage.image_id}
+                                        style={{
+                                            maxWidth: '100%',
+                                            maxHeight: '500px',
+                                            objectFit: 'contain',
+                                            display: 'block',
+                                            margin: '0 auto',
+                                            borderRadius: '4px',
+                                        }}
+                                    />
+                                    <div style={{ marginTop: '12px', fontSize: '14px', color: '#666' }}>
+                                        <div><strong>Timestamp:</strong> {new Date(selectedImage.timestamp).toLocaleString()}</div>
+                                        {selectedImage.metadata && (
+                                            <>
+                                                <div><strong>Dimensions:</strong> {selectedImage.metadata.width} x {selectedImage.metadata.height}</div>
+                                                <div><strong>Format:</strong> {selectedImage.metadata.format}</div>
+                                                <div><strong>Size:</strong> {(selectedImage.file_size / 1024).toFixed(1)} KB</div>
+                                                {selectedImage.metadata.camera && <div><strong>Camera:</strong> {selectedImage.metadata.camera}</div>}
+                                            </>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    ) : (
+                        <p className="no-data">No images received yet</p>
+                    )}
                 </div>
             </div>
         </div>
