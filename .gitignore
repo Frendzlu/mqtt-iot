@@ -8,3 +8,5 @@ mosquitto/config/
 mosquitto/data/
 mosquitto/passwd
 mosquitto/acl
+.env.example
+mosquitto/data/users.json

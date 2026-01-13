@@ -9,6 +9,9 @@ import fs from "fs";
 import path from "path";
 import { exec } from "child_process";
 import bcrypt from "bcryptjs";
+import pg from "pg";
+
+const { Pool } = pg;
 
 const app = express();
 app.use(cors());
@@ -17,6 +20,26 @@ app.use(bodyParser.json());
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
     cors: { origin: "*" }, // allow all origins for dev
+});
+
+// --- PostgreSQL connection pool ---
+const pool = new Pool({
+    host: process.env.DB_HOST || "postgres",
+    port: parseInt(process.env.DB_PORT || "5432"),
+    user: process.env.DB_USER || "mqtt_user",
+    password: process.env.DB_PASSWORD || "mqtt_pass",
+    database: process.env.DB_NAME || "mqtt_db",
+    max: 20,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 2000,
+});
+
+pool.on("connect", () => {
+    console.log("[DB] Connected to PostgreSQL");
+});
+
+pool.on("error", (err) => {
+    console.error("[DB] Unexpected error on idle client", err);
 });
 
 // --- Persistent storage for users ---
@@ -73,13 +96,229 @@ mqttClient.on("message", (topic, message) => {
     const msg = message.toString();
     console.log(`[MQTT] ${topic}: ${msg}`);
 
-    // Broadcast telemetry to frontend via Socket.IO
-    users.forEach((user, uuid) => {
-        if (topic.startsWith(`/${uuid}/devices/`) && topic.endsWith("/telemetry")) {
-            io.to(uuid).emit("telemetry", msg);
+    // Parse topic: /{uuid}/devices/{deviceId}/{type}
+    const parts = topic.split("/");
+    if (parts.length >= 5 && parts[2] === "devices") {
+        const userUuid = parts[1];
+        const deviceId = parts[3];
+        const messageType = parts[4];
+
+        const user = users.get(userUuid);
+        if (!user) return;
+
+        const device = user.devices.find((d) => d.id === deviceId);
+        const deviceName = device ? device.name : "Unknown";
+
+        // Handle telemetry messages
+        if (messageType === "telemetry") {
+            // Store telemetry in database
+            storeTelemetry(userUuid, deviceId, deviceName, msg)
+                .then((result) => {
+                    console.log(`[TELEMETRY] Stored ${result.recordCount} reading(s) for ${deviceName}`);
+                    
+                    // Broadcast telemetry to frontend via Socket.IO
+                    io.to(userUuid).emit("telemetry", { 
+                        deviceId, 
+                        deviceName, 
+                        message: msg, 
+                        timestamp: new Date().toISOString() 
+                    });
+
+                    // Send acknowledgment command to device
+                    if (result.messageId) {
+                        const ackTopic = `/${userUuid}/devices/${deviceId}/commands`;
+                        const ackMessage = JSON.stringify({
+                            type: "ack",
+                            messageId: result.messageId,
+                            status: "success",
+                            recordCount: result.recordCount,
+                            timestamp: new Date().toISOString()
+                        });
+                        mqttClient.publish(ackTopic, ackMessage);
+                        console.log(`[ACK] Sent acknowledgment for message ${result.messageId}`);
+                    }
+                })
+                .catch((err) => {
+                    console.error("[DB] Failed to store telemetry:", err);
+                    
+                    // Send failure acknowledgment
+                    try {
+                        const data = JSON.parse(msg);
+                        if (data.messageId) {
+                            const ackTopic = `/${userUuid}/devices/${deviceId}/commands`;
+                            const ackMessage = JSON.stringify({
+                                type: "ack",
+                                messageId: data.messageId,
+                                status: "error",
+                                error: err.message,
+                                timestamp: new Date().toISOString()
+                            });
+                            mqttClient.publish(ackTopic, ackMessage);
+                        }
+                    } catch (e) {
+                        // Ignore parsing errors in error handler
+                    }
+                });
         }
-    });
+
+        // Handle alarm messages
+        if (messageType === "alarms") {
+            // Parse alarm message (expecting JSON with severity and message)
+            let alarmData;
+            try {
+                alarmData = JSON.parse(msg);
+            } catch (e) {
+                alarmData = { severity: "info", message: msg };
+            }
+
+            const alarm = {
+                userUuid,
+                deviceId,
+                deviceName,
+                severity: alarmData.severity || "info",
+                message: alarmData.message || msg,
+                timestamp: new Date().toISOString(),
+            };
+
+            // Broadcast alarm to frontend via Socket.IO
+            io.to(userUuid).emit("alarm", alarm);
+
+            // Store alarm in database
+            storeAlarm(alarm).catch((err) => console.error("[DB] Failed to store alarm:", err));
+        }
+
+        // Handle image messages
+        if (messageType === "images") {
+            handleImageMessage(userUuid, deviceId, deviceName, msg)
+                .then((result) => {
+                    console.log(`[IMAGE] Stored image from ${deviceName}: ${result.imageId}`);
+                    
+                    // Broadcast image notification to frontend
+                    io.to(userUuid).emit("image", {
+                        deviceId,
+                        deviceName,
+                        imageId: result.imageId,
+                        metadata: result.metadata,
+                        timestamp: new Date().toISOString()
+                    });
+
+                    // Send acknowledgment
+                    if (result.messageId) {
+                        const ackTopic = `/${userUuid}/devices/${deviceId}/commands`;
+                        const ackMessage = JSON.stringify({
+                            type: "ack",
+                            messageId: result.messageId,
+                            imageId: result.imageId,
+                            status: "success",
+                            timestamp: new Date().toISOString()
+                        });
+                        mqttClient.publish(ackTopic, ackMessage);
+                    }
+                })
+                .catch((err) => console.error("[IMAGE] Failed to store image:", err));
+        }
+    }
 });
+
+// Store telemetry in database
+// Expected format: {"sensor": "temperature", "value": 25.5, "unit": "°C", "isBatch": false, "messageId": "msg-123"}
+// Batch format: {"sensor": "temperature", "value": [[timestamp, value], ...], "unit": "°C", "isBatch": true, "messageId": "msg-123"}
+async function storeTelemetry(userUuid, deviceId, deviceName, message) {
+    let data;
+    try {
+        data = JSON.parse(message);
+    } catch (e) {
+        console.error('[TELEMETRY] Invalid JSON format:', message);
+        throw new Error('Telemetry must be valid JSON');
+    }
+
+    // Validate required fields
+    if (!data.sensor || data.value === undefined) {
+        console.error('[TELEMETRY] Missing required fields (sensor, value):', data);
+        throw new Error('Missing required fields: sensor and value');
+    }
+
+    const sensorName = data.sensor;
+    const unit = data.unit || null;
+    const isBatch = data.isBatch || false;
+    const messageId = data.messageId || null;
+
+    try {
+        if (isBatch && Array.isArray(data.value)) {
+            // Batch telemetry: value is array of [timestamp, value] tuples
+            for (const entry of data.value) {
+                if (!Array.isArray(entry) || entry.length < 2) continue;
+                
+                const [timestamp, value] = entry;
+                const parsedValue = typeof value === 'number' ? value : parseFloat(value);
+                const tsDate = new Date(timestamp);
+
+                await pool.query(
+                    `INSERT INTO telemetry (user_uuid, device_id, device_name, sensor_name, message, value, unit, timestamp, message_id) 
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+                    [userUuid, deviceId, deviceName, sensorName, JSON.stringify(entry), parsedValue, unit, tsDate, messageId]
+                );
+            }
+        } else {
+            // Single telemetry reading
+            const parsedValue = typeof data.value === 'number' ? data.value : parseFloat(data.value);
+            
+            await pool.query(
+                `INSERT INTO telemetry (user_uuid, device_id, device_name, sensor_name, message, value, unit, timestamp, message_id) 
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8)`,
+                [userUuid, deviceId, deviceName, sensorName, JSON.stringify(data), parsedValue, unit, messageId]
+            );
+        }
+
+        return { success: true, messageId, recordCount: isBatch ? data.value.length : 1 };
+    } catch (err) {
+        console.error('[TELEMETRY] Database error:', err);
+        throw err;
+    }
+}
+
+// Store alarm in database
+async function storeAlarm(alarm) {
+    await pool.query(
+        `INSERT INTO alarms (user_uuid, device_id, device_name, severity, message, timestamp) 
+         VALUES ($1, $2, $3, $4, $5, NOW())`,
+        [alarm.userUuid, alarm.deviceId, alarm.deviceName, alarm.severity, alarm.message]
+    );
+}
+
+// Handle image messages
+// Expected format: {"imageId": "img-123", "messageId": "msg-456", "data": "base64...", "metadata": {...}}
+async function handleImageMessage(userUuid, deviceId, deviceName, message) {
+    let data;
+    try {
+        data = JSON.parse(message);
+    } catch (e) {
+        console.error('[IMAGE] Invalid JSON format:', message);
+        throw new Error('Image message must be valid JSON');
+    }
+
+    if (!data.imageId || !data.data) {
+        throw new Error('Missing required fields: imageId and data');
+    }
+
+    const imageId = data.imageId;
+    const messageId = data.messageId || null;
+    const imageData = data.data; // Base64 encoded image
+    const metadata = data.metadata || {};
+
+    try {
+        await pool.query(
+            `INSERT INTO images (user_uuid, device_id, device_name, image_id, image_data, metadata, timestamp, message_id) 
+             VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7)`,
+            [userUuid, deviceId, deviceName, imageId, imageData, JSON.stringify(metadata), messageId]
+        );
+
+        return { success: true, imageId, messageId, metadata };
+    } catch (err) {
+        console.error('[IMAGE] Database error:', err);
+        throw err;
+    }
+}
 
 // --- REST endpoints ---
 app.get("/", (_, res) => res.send("Backend with managed MQTT + WebSockets running"));
@@ -226,6 +465,193 @@ app.post("/publish", (req, res) => {
     }
 
     res.json({ status: "ok" });
+});
+
+// Get telemetry data for a device
+app.get("/telemetry/:userUuid/:deviceId", async (req, res) => {
+    const { userUuid, deviceId } = req.params;
+    const limit = parseInt(req.query.limit || "100");
+    const hours = parseInt(req.query.hours || "24");
+    const sensorName = req.query.sensor;
+
+    // Validate hours is a number to prevent SQL injection
+    if (isNaN(hours) || hours < 0 || hours > 8760) {
+        return res.status(400).json({ error: "Invalid hours parameter" });
+    }
+    if (isNaN(limit) || limit < 1 || limit > 10000) {
+        return res.status(400).json({ error: "Invalid limit parameter" });
+    }
+
+    try {
+        let query = `SELECT id, device_id, device_name, sensor_name, message, value, unit, timestamp 
+             FROM telemetry 
+             WHERE user_uuid = $1 AND device_id = $2 AND timestamp > NOW() - make_interval(hours => $3)`;
+        const params = [userUuid, deviceId, hours];
+
+        if (sensorName) {
+            query += ` AND sensor_name = $4`;
+            params.push(sensorName);
+            query += ` ORDER BY timestamp DESC LIMIT $5`;
+            params.push(limit);
+        } else {
+            query += ` ORDER BY timestamp DESC LIMIT $4`;
+            params.push(limit);
+        }
+
+        const result = await pool.query(query, params);
+        res.json(result.rows);
+    } catch (err) {
+        console.error("[DB] Error fetching telemetry:", err);
+        res.status(500).json({ error: "Database error" });
+    }
+});
+
+// Get list of sensors for a device
+app.get("/sensors/:userUuid/:deviceId", async (req, res) => {
+    const { userUuid, deviceId } = req.params;
+
+    try {
+        const result = await pool.query(
+            `SELECT DISTINCT sensor_name, 
+             COUNT(*) as reading_count,
+             MAX(timestamp) as last_reading
+             FROM telemetry 
+             WHERE user_uuid = $1 AND device_id = $2 AND sensor_name IS NOT NULL
+             GROUP BY sensor_name
+             ORDER BY sensor_name`,
+            [userUuid, deviceId]
+        );
+        res.json(result.rows);
+    } catch (err) {
+        console.error("[DB] Error fetching sensors:", err);
+        res.status(500).json({ error: "Database error" });
+    }
+});
+
+// Get all telemetry for a user
+app.get("/telemetry/:userUuid", async (req, res) => {
+    const { userUuid } = req.params;
+    const limit = parseInt(req.query.limit || "100");
+    const hours = parseInt(req.query.hours || "24");
+
+    // Validate hours and limit to prevent SQL injection
+    if (isNaN(hours) || hours < 0 || hours > 8760) {
+        return res.status(400).json({ error: "Invalid hours parameter" });
+    }
+    if (isNaN(limit) || limit < 1 || limit > 10000) {
+        return res.status(400).json({ error: "Invalid limit parameter" });
+    }
+
+    try {
+        const result = await pool.query(
+            `SELECT id, device_id, device_name, message, value, unit, timestamp 
+             FROM telemetry 
+             WHERE user_uuid = $1 AND timestamp > NOW() - make_interval(hours => $2)
+             ORDER BY timestamp DESC 
+             LIMIT $3`,
+            [userUuid, hours, limit]
+        );
+        res.json(result.rows);
+    } catch (err) {
+        console.error("[DB] Error fetching telemetry:", err);
+        res.status(500).json({ error: "Database error" });
+    }
+});
+
+// Get alarms for a user
+app.get("/alarms/:userUuid", async (req, res) => {
+    const { userUuid } = req.params;
+    const limit = parseInt(req.query.limit || "50");
+    const acknowledged = req.query.acknowledged;
+
+    try {
+        let query = `SELECT id, device_id, device_name, severity, message, acknowledged, acknowledged_at, timestamp 
+                     FROM alarms 
+                     WHERE user_uuid = $1`;
+        const params = [userUuid];
+
+        if (acknowledged !== undefined) {
+            query += ` AND acknowledged = $2`;
+            params.push(acknowledged === "true");
+        }
+
+        query += ` ORDER BY timestamp DESC LIMIT $${params.length + 1}`;
+        params.push(limit);
+
+        const result = await pool.query(query, params);
+        res.json(result.rows);
+    } catch (err) {
+        console.error("[DB] Error fetching alarms:", err);
+        res.status(500).json({ error: "Database error" });
+    }
+});
+
+// Acknowledge an alarm
+app.post("/alarms/:alarmId/acknowledge", async (req, res) => {
+    const { alarmId } = req.params;
+
+    try {
+        await pool.query(
+            `UPDATE alarms SET acknowledged = true, acknowledged_at = NOW() WHERE id = $1`,
+            [alarmId]
+        );
+        res.json({ status: "ok" });
+    } catch (err) {
+        console.error("[DB] Error acknowledging alarm:", err);
+        res.status(500).json({ error: "Database error" });
+    }
+});
+
+// Get images for a device
+app.get("/images/:userUuid/:deviceId", async (req, res) => {
+    const { userUuid, deviceId } = req.params;
+    const limit = parseInt(req.query.limit || "20");
+
+    try {
+        const result = await pool.query(
+            `SELECT id, image_id, device_name, metadata, timestamp, message_id,
+             LENGTH(image_data) as size
+             FROM images 
+             WHERE user_uuid = $1 AND device_id = $2
+             ORDER BY timestamp DESC 
+             LIMIT $3`,
+            [userUuid, deviceId, limit]
+        );
+        res.json(result.rows);
+    } catch (err) {
+        console.error("[DB] Error fetching images:", err);
+        res.status(500).json({ error: "Database error" });
+    }
+});
+
+// Get a specific image
+app.get("/images/:userUuid/:deviceId/:imageId", async (req, res) => {
+    const { userUuid, deviceId, imageId } = req.params;
+
+    try {
+        const result = await pool.query(
+            `SELECT image_id, device_name, image_data, metadata, timestamp
+             FROM images 
+             WHERE user_uuid = $1 AND device_id = $2 AND image_id = $3`,
+            [userUuid, deviceId, imageId]
+        );
+        
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: "Image not found" });
+        }
+
+        const image = result.rows[0];
+        res.json({
+            imageId: image.image_id,
+            deviceName: image.device_name,
+            data: image.image_data,
+            metadata: image.metadata,
+            timestamp: image.timestamp
+        });
+    } catch (err) {
+        console.error("[DB] Error fetching image:", err);
+        res.status(500).json({ error: "Database error" });
+    }
 });
 
 // --- Socket.IO connections ---

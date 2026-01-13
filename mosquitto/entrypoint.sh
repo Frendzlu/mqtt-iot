@@ -37,15 +37,15 @@ EOF
 fi
 
 # Set correct permissions so mosquitto can read the files
-# passwd must be readable by the mosquitto process; use 0644 for simplicity
-# Try to set ownership to the mosquitto user and restrictive permissions as recommended
+# Set ownership to mosquitto user and use restrictive permissions
 if id mosquitto >/dev/null 2>&1; then
   chown mosquitto:mosquitto "$PASSWD_FILE" || true
   chown mosquitto:mosquitto "$ACL_FILE" || true
+  chown -R mosquitto:mosquitto /mosquitto/log || true
 fi
 # Use restrictive perms recommended by mosquitto (0700) to avoid future rejections
-chmod 0644 "$PASSWD_FILE" || true
-chmod 0644 "$ACL_FILE" || true
+chmod 0700 "$PASSWD_FILE" || true
+chmod 0700 "$ACL_FILE" || true
 
 # Exec mosquitto as the container's main process
 exec /usr/sbin/mosquitto -c /mosquitto/config/mosquitto.conf -v

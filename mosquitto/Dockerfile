@@ -2,8 +2,8 @@ FROM eclipse-mosquitto:2.0
 
 RUN mkdir -p /mosquitto/config /mosquitto/data /mosquitto/log
 
+# Copy mosquitto configuration
 COPY mosquitto.conf /mosquitto/config/mosquitto.conf
-# The entrypoint will create `passwd` and `acl` if missing. Do not copy host files here.
 
 EXPOSE 1883 9001
 

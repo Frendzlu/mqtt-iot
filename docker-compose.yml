@@ -1,15 +1,33 @@
 services:
 
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    environment:
+      - POSTGRES_USER=mqtt_user
+      - POSTGRES_PASSWORD=mqtt_pass
+      - POSTGRES_DB=mqtt_db
+    volumes:
+      - ./postgres-data:/var/lib/postgresql/data
+      - ./sql/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    restart: always
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U mqtt_user -d mqtt_db" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   mosquitto:
     build: ./mosquitto
     container_name: mosquitto
     environment:
-      - MOSQ_USER=adm
-      - MOSQ_PASS=sdf
+      - MOSQ_USER=backend-manager
+      - MOSQ_PASS=supersecret
     volumes:
-      - ./mosquitto/config:/mosquitto/config
-      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
-      - ./mosquitto/log:/mosquitto/log
+      - mosquitto_data:/mosquitto/config
+      - mosquitto_log:/mosquitto/log
     ports:
       - "1883:1883"
       - "9001:9001"
@@ -21,15 +39,23 @@ services:
     environment:
       - MOSQUITTO_PASSWD=/mosquitto/config/passwd
       - MOSQUITTO_ACL=/mosquitto/config/acl
-      - BROKER_USER=${MOSQ_USER:-backend-manager}
-      - BROKER_PASS=${MOSQ_PASS:-supersecret}
+      - BROKER_USER=backend-manager
+      - BROKER_PASS=supersecret
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=mqtt_user
+      - DB_PASSWORD=mqtt_pass
+      - DB_NAME=mqtt_db
     volumes:
-      - ./mosquitto:/mosquitto
+      - mosquitto_data:/mosquitto/config
       - /var/run/docker.sock:/var/run/docker.sock
     ports:
       - "3001:3001"
     depends_on:
-      - mosquitto
+      postgres:
+        condition: service_healthy
+      mosquitto:
+        condition: service_started
     restart: always
 
   frontend:
@@ -40,3 +66,7 @@ services:
     depends_on:
       - backend
     restart: always
+
+volumes:
+  mosquitto_data:
+  mosquitto_log:
