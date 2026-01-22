@@ -80,9 +80,11 @@ export default function App() {
                 return;
             }
             const data = await res.json();
+            console.log(`[DEVICES] Fetched ${data.length} device(s):`, data);
             setDevices(data);
             if (data.length > 0 && !selectedDevice) {
                 setSelectedDevice(data[0]);
+                console.log('[DEVICES] Auto-selected first device:', data[0]);
             }
         } catch (err) {
             console.error("Error fetching devices:", err);
@@ -114,10 +116,10 @@ export default function App() {
             const res = await fetch(`${backendUrl}/add-device`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ 
-                    userUuid: uuid, 
-                    deviceName: newDeviceName, 
-                    macAddress: newDeviceMacAddress 
+                body: JSON.stringify({
+                    userUuid: uuid,
+                    deviceName: newDeviceName,
+                    macAddress: newDeviceMacAddress
                 }),
             });
             if (!res.ok) {
@@ -177,6 +179,13 @@ export default function App() {
             setUnacknowledgedCount((prev) => prev + 1);
         });
 
+        s.on("device-registered", (data: any) => {
+            console.log("[SOCKET] Device registered:", data);
+            // Refresh devices list to include the new device
+            console.log('[SOCKET] Refreshing devices list...');
+            fetchDevices(userUuid);
+        });
+
         s.on("disconnect", () => {
             console.log("Socket.IO disconnected");
         });
@@ -193,7 +202,7 @@ export default function App() {
         return (
             <div className="login-container">
                 <div className="login-card">
-                    <h1>🔌 MQTT IoT Dashboard, ojojoj</h1>
+                    <h1>🔌 MQTT IoT Dashboard</h1>
                     <p className="subtitle">Manage your IoT devices and monitor telemetry in real-time</p>
 
                     <div className="form-group">
