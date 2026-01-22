@@ -21,8 +21,8 @@ CREATE TABLE IF NOT EXISTS devices (
 -- Telemetry table: stores time series data from devices
 CREATE TABLE IF NOT EXISTS telemetry (
     id SERIAL PRIMARY KEY,
-    user_uuid VARCHAR(255) NOT NULL,
-    device_mac_address VARCHAR(255) NOT NULL,
+    user_uuid VARCHAR(255) NOT NULL REFERENCES users(uuid) ON DELETE CASCADE,
+    device_mac_address VARCHAR(255) NOT NULL REFERENCES devices(mac_address) ON DELETE CASCADE,
     device_name VARCHAR(255),
     sensor_name VARCHAR(255),
     message TEXT NOT NULL,
@@ -36,8 +36,8 @@ CREATE TABLE IF NOT EXISTS telemetry (
 -- Alarms table: stores alarm events from devices
 CREATE TABLE IF NOT EXISTS alarms (
     id SERIAL PRIMARY KEY,
-    user_uuid VARCHAR(255) NOT NULL,
-    device_mac_address VARCHAR(255) NOT NULL,
+    user_uuid VARCHAR(255) NOT NULL REFERENCES users(uuid) ON DELETE CASCADE,
+    device_mac_address VARCHAR(255) NOT NULL REFERENCES devices(mac_address) ON DELETE CASCADE,
     device_name VARCHAR(255),
     severity VARCHAR(20) NOT NULL DEFAULT 'info',
     message TEXT NOT NULL,
@@ -51,8 +51,8 @@ CREATE TABLE IF NOT EXISTS alarms (
 -- Note: image_data is nullable to support file-based storage
 CREATE TABLE IF NOT EXISTS images (
     id SERIAL PRIMARY KEY,
-    user_uuid VARCHAR(255) NOT NULL,
-    device_mac_address VARCHAR(255) NOT NULL,
+    user_uuid VARCHAR(255) NOT NULL REFERENCES users(uuid) ON DELETE CASCADE,
+    device_mac_address VARCHAR(255) NOT NULL REFERENCES devices(mac_address) ON DELETE CASCADE,
     device_name VARCHAR(255),
     image_id VARCHAR(255) NOT NULL,
     image_data TEXT,
