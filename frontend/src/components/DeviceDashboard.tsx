@@ -119,17 +119,68 @@ export default function DeviceDashboard({ device, userUuid, backendUrl }: Props)
     };
 
     // Prepare chart data
-    const chartData = telemetry
-        .filter((t) => t.value !== null)
-        .map((t) => ({
-            timestamp: new Date(t.timestamp).toLocaleTimeString(),
-            value: t.value,
-            unit: t.unit,
-            fullTime: new Date(t.timestamp).toLocaleString(),
-        }));
+    const prepareChartData = () => {
+        if (selectedSensor) {
+            // Single sensor selected - return one dataset
+            return {
+                [selectedSensor]: telemetry
+                    .filter((t) => t.value !== null && t.sensor_name === selectedSensor)
+                    .map((t) => ({
+                        timestamp: new Date(t.timestamp).toLocaleTimeString(),
+                        value: t.value,
+                        unit: t.unit,
+                        fullTime: new Date(t.timestamp).toLocaleString(),
+                    }))
+            };
+        } else {
+            // All sensors selected - group by sensor_name
+            const grouped: Record<string, typeof telemetry> = {};
+            telemetry.forEach((t) => {
+                if (t.value !== null && t.sensor_name) {
+                    if (!grouped[t.sensor_name]) {
+                        grouped[t.sensor_name] = [];
+                    }
+                    grouped[t.sensor_name].push(t);
+                }
+            });
 
-    const hasNumericData = chartData.length > 0;
-    const latestValue = telemetry.length > 0 ? telemetry[telemetry.length - 1] : null;
+            // Convert to chart data format
+            const chartDataBySensor: Record<string, any[]> = {};
+            Object.entries(grouped).forEach(([sensorName, data]) => {
+                chartDataBySensor[sensorName] = data.map((t) => ({
+                    timestamp: new Date(t.timestamp).toLocaleTimeString(),
+                    value: t.value,
+                    unit: t.unit,
+                    fullTime: new Date(t.timestamp).toLocaleString(),
+                }));
+            });
+            return chartDataBySensor;
+        }
+    };
+
+    const chartDataBySensor = prepareChartData();
+    const hasNumericData = Object.values(chartDataBySensor).some(data => data.length > 0);
+
+    // Get latest values for each sensor
+    const getLatestValues = () => {
+        if (selectedSensor) {
+            const latest = telemetry
+                .filter((t) => t.sensor_name === selectedSensor)
+                .slice(-1)[0];
+            return latest ? { [selectedSensor]: latest } : {};
+        } else {
+            // Group by sensor and get latest for each
+            const latestBySensor: Record<string, TelemetryData> = {};
+            telemetry.forEach((t) => {
+                if (t.sensor_name) {
+                    latestBySensor[t.sensor_name] = t; // This will keep overwriting with newer values
+                }
+            });
+            return latestBySensor;
+        }
+    };
+
+    const latestValues = getLatestValues();
 
     return (
         <div className="device-dashboard">
@@ -168,10 +219,10 @@ export default function DeviceDashboard({ device, userUuid, backendUrl }: Props)
             </div>
 
             <div className="dashboard-grid">
-                {/* Latest Value Card */}
-                <div className="card latest-value-card">
-                    <h3>Latest Reading{selectedSensor ? `: ${selectedSensor}` : ""}</h3>
-                    {latestValue ? (
+                {/* Latest Value Cards */}
+                {Object.entries(latestValues).map(([sensorName, latestValue]) => (
+                    <div key={`latest-${sensorName}`} className="card latest-value-card">
+                        <h3>Latest Reading: {sensorName}</h3>
                         <div className="value-display">
                             <div className="value">
                                 {latestValue.value !== null ? (
@@ -183,17 +234,20 @@ export default function DeviceDashboard({ device, userUuid, backendUrl }: Props)
                                     <span className="value-text">{latestValue.message}</span>
                                 )}
                             </div>
-                            {latestValue.sensor_name && (
-                                <div className="sensor-badge">{latestValue.sensor_name}</div>
-                            )}
+                            <div className="sensor-badge">{sensorName}</div>
                             <div className="value-time">
                                 {new Date(latestValue.timestamp).toLocaleString()}
                             </div>
                         </div>
-                    ) : (
+                    </div>
+                ))}
+
+                {Object.keys(latestValues).length === 0 && (
+                    <div className="card latest-value-card">
+                        <h3>Latest Reading{selectedSensor ? `: ${selectedSensor}` : ""}</h3>
                         <p className="no-data">No data received yet</p>
-                    )}
-                </div>
+                    </div>
+                )}
 
                 {/* Statistics Card */}
                 <div className="card stats-card">
@@ -206,69 +260,79 @@ export default function DeviceDashboard({ device, userUuid, backendUrl }: Props)
                         {hasNumericData && (
                             <>
                                 <div className="stat-item">
-                                    <span className="stat-label">Average</span>
-                                    <span className="stat-value">
-                                        {(
-                                            chartData.reduce((sum, d) => sum + (d.value || 0), 0) / chartData.length
-                                        ).toFixed(2)}
-                                    </span>
+                                    <span className="stat-label">Sensors Active</span>
+                                    <span className="stat-value">{Object.keys(chartDataBySensor).length}</span>
                                 </div>
-                                <div className="stat-item">
-                                    <span className="stat-label">Min</span>
-                                    <span className="stat-value">
-                                        {Math.min(...chartData.map((d) => d.value || 0)).toFixed(2)}
-                                    </span>
-                                </div>
-                                <div className="stat-item">
-                                    <span className="stat-label">Max</span>
-                                    <span className="stat-value">
-                                        {Math.max(...chartData.map((d) => d.value || 0)).toFixed(2)}
-                                    </span>
-                                </div>
+                                {selectedSensor && chartDataBySensor[selectedSensor] && (
+                                    <>
+                                        <div className="stat-item">
+                                            <span className="stat-label">Average</span>
+                                            <span className="stat-value">
+                                                {(
+                                                    chartDataBySensor[selectedSensor].reduce((sum, d) => sum + (d.value || 0), 0) / chartDataBySensor[selectedSensor].length
+                                                ).toFixed(2)}
+                                            </span>
+                                        </div>
+                                        <div className="stat-item">
+                                            <span className="stat-label">Min</span>
+                                            <span className="stat-value">
+                                                {Math.min(...chartDataBySensor[selectedSensor].map((d) => d.value || 0)).toFixed(2)}
+                                            </span>
+                                        </div>
+                                        <div className="stat-item">
+                                            <span className="stat-label">Max</span>
+                                            <span className="stat-value">
+                                                {Math.max(...chartDataBySensor[selectedSensor].map((d) => d.value || 0)).toFixed(2)}
+                                            </span>
+                                        </div>
+                                    </>
+                                )}
                             </>
                         )}
                     </div>
                 </div>
 
-                {/* Chart Card */}
-                {hasNumericData && (
-                    <div className="card chart-card">
-                        <h3>Telemetry Time Series</h3>
-                        <ResponsiveContainer width="100%" height={300}>
-                            <LineChart data={chartData}>
-                                <CartesianGrid strokeDasharray="3 3" stroke="#e0e0e0" />
-                                <XAxis
-                                    dataKey="timestamp"
-                                    tick={{ fontSize: 12 }}
-                                    angle={-45}
-                                    textAnchor="end"
-                                    height={80}
-                                />
-                                <YAxis tick={{ fontSize: 12 }} />
-                                <Tooltip
-                                    contentStyle={{
-                                        backgroundColor: "#fff",
-                                        border: "1px solid #ccc",
-                                        borderRadius: "8px",
-                                    }}
-                                    formatter={(value: any) => [
-                                        `${value}${chartData[0]?.unit || ""}`,
-                                        "Value",
-                                    ]}
-                                />
-                                <Legend />
-                                <Line
-                                    type="monotone"
-                                    dataKey="value"
-                                    stroke="#4f46e5"
-                                    strokeWidth={2}
-                                    dot={{ fill: "#4f46e5", r: 3 }}
-                                    activeDot={{ r: 6 }}
-                                    name="Value"
-                                />
-                            </LineChart>
-                        </ResponsiveContainer>
-                    </div>
+                {/* Chart Cards - One per sensor when "all" selected, or single chart for selected sensor */}
+                {Object.entries(chartDataBySensor).map(([sensorName, chartData]) => 
+                    chartData.length > 0 && (
+                        <div key={`chart-${sensorName}`} className="card chart-card">
+                            <h3>📈 {sensorName} Time Series</h3>
+                            <ResponsiveContainer width="100%" height={300}>
+                                <LineChart data={chartData}>
+                                    <CartesianGrid strokeDasharray="3 3" stroke="#e0e0e0" />
+                                    <XAxis
+                                        dataKey="timestamp"
+                                        tick={{ fontSize: 12 }}
+                                        angle={-45}
+                                        textAnchor="end"
+                                        height={80}
+                                    />
+                                    <YAxis tick={{ fontSize: 12 }} />
+                                    <Tooltip
+                                        contentStyle={{
+                                            backgroundColor: "#fff",
+                                            border: "1px solid #ccc",
+                                            borderRadius: "8px",
+                                        }}
+                                        formatter={(value: any) => [
+                                            `${value}${chartData[0]?.unit || ""}`,
+                                            sensorName,
+                                        ]}
+                                    />
+                                    <Legend />
+                                    <Line
+                                        type="monotone"
+                                        dataKey="value"
+                                        stroke="#4f46e5"
+                                        strokeWidth={2}
+                                        dot={{ fill: "#4f46e5", r: 3 }}
+                                        activeDot={{ r: 6 }}
+                                        name={sensorName}
+                                    />
+                                </LineChart>
+                            </ResponsiveContainer>
+                        </div>
+                    )
                 )}
 
                 {/* Command Card */}

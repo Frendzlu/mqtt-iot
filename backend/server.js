@@ -92,8 +92,91 @@ mqttClient.on("message", (topic, message) => {
     const msg = message.toString();
     console.log(`[MQTT] ${topic}: ${msg}`);
 
-    // Parse topic: /{uuid}/devices/{deviceId}/{type}
+    // Parse topic: /{uuid}/devices/{deviceId}/{type} or /{uuid}/devices for self-registration
     const parts = topic.split("/");
+    
+    // Handle device self-registration: /{uuid}/devices
+    if (parts.length === 3 && parts[2] === "devices") {
+        const userUuid = parts[1];
+        const user = users.get(userUuid);
+        if (!user) {
+            console.warn(`[DEVICE-REGISTER] User not found: ${userUuid}`);
+            return;
+        }
+
+        let registrationData;
+        try {
+            registrationData = JSON.parse(msg);
+        } catch (e) {
+            // If not JSON, treat the entire message as device name
+            registrationData = { name: msg };
+        }
+
+        const deviceName = registrationData.name;
+        if (!deviceName) {
+            console.warn(`[DEVICE-REGISTER] No device name provided in message: ${msg}`);
+            return;
+        }
+
+        // Generate unique device name if duplicate exists
+        let finalDeviceName = deviceName;
+        let counter = 1;
+        while (user.devices.find(d => d.name === finalDeviceName)) {
+            finalDeviceName = `${deviceName}_copy${counter > 1 ? counter : ''}`;
+            counter++;
+        }
+
+        if (finalDeviceName !== deviceName) {
+            console.log(`[DEVICE-REGISTER] Device name ${deviceName} already exists, using ${finalDeviceName}`);
+        }
+
+        // Create new device
+        const deviceId = uuidv4();
+        const newDevice = { id: deviceId, name: finalDeviceName };
+
+        // Save to database
+        pool.query(
+            'INSERT INTO devices (id, user_uuid, name) VALUES ($1, $2, $3)',
+            [deviceId, userUuid, finalDeviceName]
+        )
+        .then(() => {
+            // Add to in-memory user
+            user.devices.push(newDevice);
+            console.log(`[DEVICE-REGISTER] Created new device: ${finalDeviceName} (${deviceId}) for user ${user.username}`);
+
+            // Send response back to device
+            const responseTopic = `/${userUuid}/devices/register-response`;
+            const responseMessage = JSON.stringify({
+                name: finalDeviceName,
+                uuid: deviceId,
+                status: "created",
+                originalName: finalDeviceName !== deviceName ? deviceName : undefined,
+                timestamp: new Date().toISOString()
+            });
+            mqttClient.publish(responseTopic, responseMessage);
+
+            // Broadcast device creation to frontend via Socket.IO
+            io.to(userUuid).emit("device-registered", {
+                deviceId,
+                deviceName: finalDeviceName,
+                timestamp: new Date().toISOString()
+            });
+        })
+        .catch((err) => {
+            console.error('[DEVICE-REGISTER] Database error:', err);
+            const responseTopic = `/${userUuid}/devices/register-response`;
+            const responseMessage = JSON.stringify({
+                name: finalDeviceName,
+                status: "error",
+                error: err.message,
+                timestamp: new Date().toISOString()
+            });
+            mqttClient.publish(responseTopic, responseMessage);
+        });
+
+        return;
+    }
+
     if (parts.length >= 5 && parts[2] === "devices") {
         const userUuid = parts[1];
         const deviceId = parts[3];
@@ -731,6 +814,72 @@ app.get("/images/:userUuid/:deviceId/:imageId", async (req, res) => {
     } catch (err) {
         console.error("[DB] Error fetching image:", err);
         res.status(500).json({ error: "Database error" });
+    }
+});
+
+// PUT endpoint for uploading images (alternative to MQTT)
+// Expected body: { "imageId": "img-123", "imageData": "base64...", "metadata": {...} }
+app.put("/images/:userUuid/:deviceId", async (req, res) => {
+    const { userUuid, deviceId } = req.params;
+    const { imageId, imageData, metadata } = req.body;
+
+    // Validate user exists
+    const user = users.get(userUuid);
+    if (!user) {
+        return res.status(404).json({ error: "User not found" });
+    }
+
+    // Validate device exists for user
+    const device = user.devices.find((d) => d.id === deviceId);
+    if (!device) {
+        return res.status(404).json({ error: "Device not found" });
+    }
+
+    // Validate required fields
+    if (!imageId || !imageData) {
+        return res.status(400).json({ error: "Missing required fields: imageId and imageData" });
+    }
+
+    try {
+        // Generate unique filename
+        const timestamp = Date.now();
+        const extension = metadata?.format || 'png';
+        const filename = `${userUuid}_${deviceId}_${imageId}_${timestamp}.${extension}`;
+        const filepath = path.join(IMAGES_DIR, filename);
+
+        // Decode base64 and save to file
+        const imageBuffer = Buffer.from(imageData, 'base64');
+        fs.writeFileSync(filepath, imageBuffer);
+
+        const fileSize = imageBuffer.length;
+        console.log(`[IMAGE] Saved image via PUT: ${filename} (${fileSize} bytes)`);
+
+        // Store metadata and file path in database
+        await pool.query(
+            `INSERT INTO images (user_uuid, device_id, device_name, image_id, file_path, file_size, metadata, timestamp, message_id) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8)`,
+            [userUuid, deviceId, device.name, imageId, filename, fileSize, JSON.stringify(metadata || {}), null]
+        );
+
+        // Broadcast image notification to frontend via Socket.IO
+        io.to(userUuid).emit("image", {
+            deviceId,
+            deviceName: device.name,
+            imageId,
+            metadata: metadata || {},
+            timestamp: new Date().toISOString()
+        });
+
+        res.json({
+            status: "ok",
+            imageId,
+            filename,
+            fileSize,
+            timestamp: new Date().toISOString()
+        });
+    } catch (err) {
+        console.error("[IMAGE] Error saving image via PUT:", err);
+        res.status(500).json({ error: "Failed to save image", details: String(err) });
     }
 });
 

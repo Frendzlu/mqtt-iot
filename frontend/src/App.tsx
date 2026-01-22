@@ -185,7 +185,7 @@ export default function App() {
         return (
             <div className="login-container">
                 <div className="login-card">
-                    <h1>🔌 MQTT IoT Dashboard</h1>
+                    <h1>🔌 MQTT IoT Dashboard, ojojoj</h1>
                     <p className="subtitle">Manage your IoT devices and monitor telemetry in real-time</p>
 
                     <div className="form-group">

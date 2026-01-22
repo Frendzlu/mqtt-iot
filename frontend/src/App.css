@@ -242,7 +242,7 @@ body {
 .content-area {
   flex: 1;
   overflow-y: auto;
-  padding: 24px;
+  padding: 16px;
 }
 
 .empty-state {
@@ -295,6 +295,7 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  color: var(--text);
 }
 
 .btn:disabled {
@@ -313,7 +314,7 @@ body {
 
 .btn-secondary {
   background: var(--bg);
-  color: var(--text);
+  color: var(--text) !important;
   border: 1px solid var(--border);
 }
 
@@ -328,8 +329,9 @@ body {
 
 /* Device Dashboard */
 .device-dashboard {
-  max-width: 1400px;
-  margin: 0 auto;
+  width: 100%;
+  max-width: none;
+  margin: 0;
 }
 
 .dashboard-header {
@@ -372,13 +374,22 @@ body {
   border-radius: 8px;
   font-size: 14px;
   background: var(--bg-card);
+  color: var(--text);
   cursor: pointer;
+}
+
+.sensor-filter select:focus,
+.time-range-selector select:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
 }
 
 .dashboard-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
-  gap: 20px;
+  grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+  gap: 16px;
+  width: 100%;
 }
 
 .card {
@@ -516,7 +527,8 @@ body {
   padding: 6px 12px;
   border: 1px solid var(--border);
   border-radius: 6px;
-  background: var(--bg);
+  background: var(--bg-card);
+  color: #000000;
   font-size: 12px;
   cursor: pointer;
   transition: all 0.2s;
@@ -524,6 +536,7 @@ body {
 
 .btn-example:hover {
   background: var(--border);
+  color: #000000;
 }
 
 .messages-list {
@@ -561,8 +574,9 @@ body {
 
 /* Alarms Panel */
 .alarms-panel {
-  max-width: 1000px;
-  margin: 0 auto;
+  width: 100%;
+  max-width: none;
+  margin: 0;
 }
 
 .panel-header {

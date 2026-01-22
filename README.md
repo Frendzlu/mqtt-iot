@@ -277,7 +277,58 @@ Returns the actual image file with appropriate `Content-Type` header.
 
 ### Message Types
 
-#### 1. Telemetry (Device to Backend)
+#### 1. Device Self-Registration (Device to Backend)
+
+**Topic:** `/{userUuid}/devices`
+
+**Device Registration Request:**
+
+JSON Format:
+```json
+{
+  "name": "My Device Name"
+}
+```
+
+Plain Text Format:
+```
+My Device Name
+```
+
+**Registration Response (Backend to Device):**
+
+**Topic:** `/{userUuid}/devices/register-response`
+
+**Response Format:**
+```json
+{
+  "name": "My Device Name",
+  "uuid": "generated-device-uuid",
+  "status": "created|existing|error",
+  "timestamp": "2026-01-22T10:15:00Z",
+  "error": "Error message (only if status is error)"
+}
+```
+
+**Example Registration Flow:**
+```bash
+# Device sends registration request
+mosquitto_pub -h localhost -u <userUuid> -P <password> \
+  -t "/<userUuid>/devices" \
+  -m '{"name":"Temperature Sensor v2"}'
+
+# Device subscribes to response topic
+mosquitto_sub -h localhost -u <userUuid> -P <password> \
+  -t "/<userUuid>/devices/register-response"
+```
+
+**Behavior:**
+- If a device with the same name already exists, returns the existing UUID with status "existing"
+- If new device, creates it in the database and returns new UUID with status "created" 
+- If error occurs, returns status "error" with error message
+- Frontend is notified in real-time via Socket.IO when new devices are registered
+
+#### 2. Telemetry (Device to Backend)
 
 **Topic:** `/{userUuid}/devices/{deviceId}/telemetry`
 
@@ -314,7 +365,7 @@ mosquitto_pub -h localhost -u <userUuid> -P <password> \
   -m '{"sensor":"temperature","value":25.5,"unit":"C","isBatch":false,"messageId":"msg-123"}'
 ```
 
-#### 2. Commands/Acknowledgments (Backend to Device)
+#### 3. Commands/Acknowledgments (Backend to Device)
 
 **Topic:** `/{userUuid}/devices/{deviceId}/commands`
 
@@ -335,7 +386,7 @@ mosquitto_sub -h localhost -u <userUuid> -P <password> \
   -t "/<userUuid>/devices/<deviceId>/commands"
 ```
 
-#### 3. Images (Device to Backend)
+#### 4. Images (Device to Backend)
 
 **Topic:** `/{userUuid}/devices/{deviceId}/images`
 
@@ -363,7 +414,7 @@ mosquitto_pub -h localhost -u <userUuid> -P <password> \
 
 Images are stored in the Docker volume `images_storage` and served via the API.
 
-#### 4. Alarms (Device to Backend)
+#### 5. Alarms (Device to Backend)
 
 **Topic:** `/{userUuid}/devices/{deviceId}/alarms`
 
