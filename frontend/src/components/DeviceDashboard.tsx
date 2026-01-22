@@ -38,9 +38,10 @@ type Props = {
     device: Device;
     userUuid: string;
     backendUrl: string;
+    refreshTrigger?: number;
 };
 
-export default function DeviceDashboard({ device, userUuid, backendUrl }: Props) {
+export default function DeviceDashboard({ device, userUuid, backendUrl, refreshTrigger }: Props) {
     const [telemetry, setTelemetry] = useState<TelemetryData[]>([]);
     const [sensors, setSensors] = useState<SensorInfo[]>([]);
     const [selectedSensor, setSelectedSensor] = useState<string | null>(null);
@@ -59,7 +60,7 @@ export default function DeviceDashboard({ device, userUuid, backendUrl }: Props)
             fetchImages();
         }, 5000); // Refresh every 5 seconds
         return () => clearInterval(interval);
-    }, [device.macAddress, timeRange, selectedSensor]);
+    }, [device.macAddress, timeRange, selectedSensor, refreshTrigger]);
 
     const fetchSensors = async () => {
         try {
@@ -293,7 +294,7 @@ export default function DeviceDashboard({ device, userUuid, backendUrl }: Props)
                 </div>
 
                 {/* Chart Cards - One per sensor when "all" selected, or single chart for selected sensor */}
-                {Object.entries(chartDataBySensor).map(([sensorName, chartData]) => 
+                {Object.entries(chartDataBySensor).map(([sensorName, chartData]) =>
                     chartData.length > 0 && (
                         <div key={`chart-${sensorName}`} className="card chart-card">
                             <h3>📈 {sensorName} Time Series</h3>

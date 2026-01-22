@@ -33,6 +33,7 @@ export default function App() {
     const [selectedDevice, setSelectedDevice] = useState<Device | null>(null);
     const [showAlarms, setShowAlarms] = useState(false);
     const [socket, setSocket] = useState<Socket | null>(null);
+    const [telemetryRefreshTrigger, setTelemetryRefreshTrigger] = useState(0);
 
     // Register a new user
     const register = async () => {
@@ -171,6 +172,8 @@ export default function App() {
 
         s.on("telemetry", (data: any) => {
             console.log("Telemetry received:", data);
+            // Trigger refresh in DeviceDashboard
+            setTelemetryRefreshTrigger((prev) => prev + 1);
         });
 
         s.on("alarm", (alarm: Alarm) => {
@@ -322,6 +325,7 @@ export default function App() {
                             device={selectedDevice}
                             userUuid={uuid}
                             backendUrl={backendUrl}
+                            refreshTrigger={telemetryRefreshTrigger}
                         />
                     ) : (
                         <div className="empty-state">
