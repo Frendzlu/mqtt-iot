@@ -1,6 +1,6 @@
 type Alarm = {
     id: number;
-    device_id: string;
+    device_mac_address: string;
     device_name: string;
     severity: string;
     message: string;

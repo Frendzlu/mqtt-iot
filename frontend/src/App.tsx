@@ -5,13 +5,13 @@ import AlarmsPanel from "./components/AlarmsPanel";
 import "./App.css";
 
 type Device = {
-    id: string;
+    macAddress: string;
     name: string;
 };
 
 type Alarm = {
     id: number;
-    device_id: string;
+    device_mac_address: string;
     device_name: string;
     severity: string;
     message: string;
@@ -27,6 +27,7 @@ export default function App() {
     const [password, setPassword] = useState("");
     const [devices, setDevices] = useState<Device[]>([]);
     const [newDeviceName, setNewDeviceName] = useState("");
+    const [newDeviceMacAddress, setNewDeviceMacAddress] = useState("");
     const [alarms, setAlarms] = useState<Alarm[]>([]);
     const [unacknowledgedCount, setUnacknowledgedCount] = useState(0);
     const [selectedDevice, setSelectedDevice] = useState<Device | null>(null);
@@ -106,12 +107,18 @@ export default function App() {
 
     // Add a new device
     const addDevice = async () => {
-        if (!newDeviceName) return;
+        if (!newDeviceName || !newDeviceMacAddress) {
+            return alert("Device name and MAC address are required");
+        }
         try {
             const res = await fetch(`${backendUrl}/add-device`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ userUuid: uuid, deviceName: newDeviceName }),
+                body: JSON.stringify({ 
+                    userUuid: uuid, 
+                    deviceName: newDeviceName, 
+                    macAddress: newDeviceMacAddress 
+                }),
             });
             if (!res.ok) {
                 const err = await res.json();
@@ -120,6 +127,7 @@ export default function App() {
             const device = await res.json();
             setDevices((prev) => [...prev, device]);
             setNewDeviceName("");
+            setNewDeviceMacAddress("");
             if (!selectedDevice) {
                 setSelectedDevice(device);
             }
@@ -245,8 +253,8 @@ export default function App() {
                         <div className="device-list">
                             {devices.map((device) => (
                                 <button
-                                    key={device.id}
-                                    className={`device-item ${selectedDevice?.id === device.id ? 'active' : ''}`}
+                                    key={device.macAddress}
+                                    className={`device-item ${selectedDevice?.macAddress === device.macAddress ? 'active' : ''}`}
                                     onClick={() => setSelectedDevice(device)}
                                 >
                                     <span className="device-icon">📱</span>
@@ -257,14 +265,21 @@ export default function App() {
 
                         <div className="add-device-form">
                             <input
-                                placeholder="New device name"
+                                placeholder="Device name"
                                 value={newDeviceName}
                                 onChange={(e) => setNewDeviceName(e.target.value)}
                                 className="input input-sm"
+                                style={{ marginBottom: '8px' }}
+                            />
+                            <input
+                                placeholder="MAC address (e.g., 00:11:22:33:44:55)"
+                                value={newDeviceMacAddress}
+                                onChange={(e) => setNewDeviceMacAddress(e.target.value)}
+                                className="input input-sm"
                                 onKeyPress={(e) => e.key === "Enter" && addDevice()}
                             />
-                            <button onClick={addDevice} className="btn btn-sm btn-primary">
-                                + Add
+                            <button onClick={addDevice} className="btn btn-sm btn-primary" style={{ marginTop: '8px' }}>
+                                + Add Device
                             </button>
                         </div>
                     </div>

@@ -14,7 +14,9 @@ PORT="1883"
 read -p "Enter your User UUID: " USER_UUID
 read -sp "Enter your MQTT Password: " PASSWORD
 echo ""
-read -p "Enter Device ID: " DEVICE_ID
+read -p "Enter Device MAC Address (e.g. 00:11:22:33:44:55): " DEVICE_MAC
+# Convert MAC address format (replace : with _)
+DEVICE_ID=${DEVICE_MAC//://_}
 
 # Topics
 TELEMETRY_TOPIC="/${USER_UUID}/devices/${DEVICE_ID}/telemetry"
@@ -26,7 +28,8 @@ echo ""
 echo "Connecting to MQTT broker..."
 echo "Broker: ${BROKER}:${PORT}"
 echo "User: ${USER_UUID}"
-echo "Device: ${DEVICE_ID}"
+echo "Device MAC: ${DEVICE_MAC}"
+echo "Device ID: ${DEVICE_ID}"
 echo ""
 echo "Topics:"
 echo "  - Telemetry: ${TELEMETRY_TOPIC}"
@@ -42,6 +45,14 @@ if ! command -v mosquitto_pub &> /dev/null; then
     echo "   macOS: brew install mosquitto"
     exit 1
 fi
+
+# Register device with backend
+echo "Registering device with backend..."
+REGISTER_TOPIC="/${USER_UUID}/devices"
+REGISTER_MSG="{\"name\":\"Simulated Device - ${DEVICE_MAC}\",\"macAddress\":\"${DEVICE_MAC}\"}"
+mosquitto_pub -h $BROKER -p $PORT -u $USER_UUID -P $PASSWORD -t $REGISTER_TOPIC -m "$REGISTER_MSG"
+echo "Device registration sent to topic: $REGISTER_TOPIC"
+sleep 2
 
 # Subscribe to commands in background
 echo "Listening for commands and acknowledgments..."

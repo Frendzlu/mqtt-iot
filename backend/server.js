@@ -1,7 +1,7 @@
 import express from "express";
 import cors from "cors";
 import bodyParser from "body-parser";
-import { v4 as uuidv4 } from "uuid";
+import { v4 as uuidv4 } from "uuid"; // Still needed for user UUIDs
 import mqtt from "mqtt";
 import { createServer } from "http";
 import { Server } from "socket.io";
@@ -54,11 +54,11 @@ async function loadUsersFromDB() {
         }));
 
         // Load devices for each user
-        const devicesResult = await pool.query('SELECT id, user_uuid, name FROM devices');
+        const devicesResult = await pool.query('SELECT mac_address, user_uuid, name FROM devices');
         for (const deviceRow of devicesResult.rows) {
             const user = users.find(u => u.uuid === deviceRow.user_uuid);
             if (user) {
-                user.devices.push({ id: deviceRow.id, name: deviceRow.name });
+                user.devices.push({ macAddress: deviceRow.mac_address, name: deviceRow.name });
             }
         }
 
@@ -88,7 +88,7 @@ mqttClient.on("connect", () => {
     });
 });
 
-mqttClient.on("message", (topic, message) => {
+mqttClient.on("message", async (topic, message) => {
     const msg = message.toString();
     console.log(`[MQTT] ${topic}: ${msg}`);
 
@@ -113,52 +113,126 @@ mqttClient.on("message", (topic, message) => {
         }
 
         const deviceName = registrationData.name;
-        if (!deviceName) {
-            console.warn(`[DEVICE-REGISTER] No device name provided in message: ${msg}`);
+        const macAddress = registrationData.macAddress;
+        
+        if (!deviceName || !macAddress) {
+            console.warn(`[DEVICE-REGISTER] Device name and MAC address required in message: ${msg}`);
             return;
         }
 
-        // Generate unique device name if duplicate exists
-        let finalDeviceName = deviceName;
-        let counter = 1;
-        while (user.devices.find(d => d.name === finalDeviceName)) {
-            finalDeviceName = `${deviceName}_copy${counter > 1 ? counter : ''}`;
-            counter++;
+        // Convert MAC address format (replace : with _)
+        const deviceMacAddress = macAddress.replace(/:/g, '_');
+
+        // Check if device with this MAC address exists for ANY user
+        let existingDevice = null;
+        let existingUser = null;
+        
+        for (const [userUuid, userData] of users) {
+            const device = userData.devices.find(d => d.macAddress === deviceMacAddress);
+            if (device) {
+                existingDevice = device;
+                existingUser = userData;
+                break;
+            }
         }
 
-        if (finalDeviceName !== deviceName) {
-            console.log(`[DEVICE-REGISTER] Device name ${deviceName} already exists, using ${finalDeviceName}`);
+        if (existingDevice && existingUser && existingUser.uuid !== userUuid) {
+            // Device exists for another user - reassign it
+            console.log(`[DEVICE-REGISTER] Reassigning device ${deviceMacAddress} from user ${existingUser.username} to ${user.username}`);
+            
+            try {
+                // Remove from old user in database and memory
+                await pool.query('UPDATE devices SET user_uuid = $1, name = $2 WHERE mac_address = $3', [userUuid, deviceName, deviceMacAddress]);
+                
+                // Update in-memory data
+                existingUser.devices = existingUser.devices.filter(d => d.macAddress !== deviceMacAddress);
+                const reassignedDevice = { macAddress: deviceMacAddress, name: deviceName };
+                user.devices.push(reassignedDevice);
+                
+                console.log(`[DEVICE-REGISTER] Reassigned device: ${deviceName} (${deviceMacAddress}) to user ${user.username}`);
+                
+                // Send response back to device
+                const responseTopic = `/${userUuid}/devices/register-response`;
+                const responseMessage = JSON.stringify({
+                    name: deviceName,
+                    macAddress: deviceMacAddress,
+                    status: "reassigned",
+                    timestamp: new Date().toISOString()
+                });
+                mqttClient.publish(responseTopic, responseMessage);
+                
+                // Broadcast device creation to frontend via Socket.IO
+                io.to(userUuid).emit("device-registered", {
+                    macAddress: deviceMacAddress,
+                    deviceName: deviceName,
+                    timestamp: new Date().toISOString()
+                });
+                
+                return;
+            } catch (err) {
+                console.error('[DEVICE-REGISTER] Database error during reassignment:', err);
+                const responseTopic = `/${userUuid}/devices/register-response`;
+                const responseMessage = JSON.stringify({
+                    name: deviceName,
+                    macAddress: deviceMacAddress,
+                    status: "error",
+                    error: err.message,
+                    timestamp: new Date().toISOString()
+                });
+                mqttClient.publish(responseTopic, responseMessage);
+                return;
+            }
+        } else if (existingDevice && existingUser && existingUser.uuid === userUuid) {
+            // Device already exists for this user - just update the name if different
+            if (existingDevice.name !== deviceName) {
+                try {
+                    await pool.query('UPDATE devices SET name = $1 WHERE mac_address = $2', [deviceName, deviceMacAddress]);
+                    existingDevice.name = deviceName;
+                    console.log(`[DEVICE-REGISTER] Updated device name: ${deviceName} (${deviceMacAddress})`);
+                } catch (err) {
+                    console.error('[DEVICE-REGISTER] Database error updating device name:', err);
+                }
+            }
+            
+            // Send response back to device
+            const responseTopic = `/${userUuid}/devices/register-response`;
+            const responseMessage = JSON.stringify({
+                name: deviceName,
+                macAddress: deviceMacAddress,
+                status: "existing",
+                timestamp: new Date().toISOString()
+            });
+            mqttClient.publish(responseTopic, responseMessage);
+            return;
         }
 
         // Create new device
-        const deviceId = uuidv4();
-        const newDevice = { id: deviceId, name: finalDeviceName };
+        const newDevice = { macAddress: deviceMacAddress, name: deviceName };
 
         // Save to database
         pool.query(
-            'INSERT INTO devices (id, user_uuid, name) VALUES ($1, $2, $3)',
-            [deviceId, userUuid, finalDeviceName]
+            'INSERT INTO devices (mac_address, user_uuid, name) VALUES ($1, $2, $3)',
+            [deviceMacAddress, userUuid, deviceName]
         )
         .then(() => {
             // Add to in-memory user
             user.devices.push(newDevice);
-            console.log(`[DEVICE-REGISTER] Created new device: ${finalDeviceName} (${deviceId}) for user ${user.username}`);
+            console.log(`[DEVICE-REGISTER] Created new device: ${deviceName} (${deviceMacAddress}) for user ${user.username}`);
 
             // Send response back to device
             const responseTopic = `/${userUuid}/devices/register-response`;
             const responseMessage = JSON.stringify({
-                name: finalDeviceName,
-                uuid: deviceId,
+                name: deviceName,
+                macAddress: deviceMacAddress,
                 status: "created",
-                originalName: finalDeviceName !== deviceName ? deviceName : undefined,
                 timestamp: new Date().toISOString()
             });
             mqttClient.publish(responseTopic, responseMessage);
 
             // Broadcast device creation to frontend via Socket.IO
             io.to(userUuid).emit("device-registered", {
-                deviceId,
-                deviceName: finalDeviceName,
+                macAddress: deviceMacAddress,
+                deviceName: deviceName,
                 timestamp: new Date().toISOString()
             });
         })
@@ -166,7 +240,8 @@ mqttClient.on("message", (topic, message) => {
             console.error('[DEVICE-REGISTER] Database error:', err);
             const responseTopic = `/${userUuid}/devices/register-response`;
             const responseMessage = JSON.stringify({
-                name: finalDeviceName,
+                name: deviceName,
+                macAddress: deviceMacAddress,
                 status: "error",
                 error: err.message,
                 timestamp: new Date().toISOString()
@@ -179,25 +254,25 @@ mqttClient.on("message", (topic, message) => {
 
     if (parts.length >= 5 && parts[2] === "devices") {
         const userUuid = parts[1];
-        const deviceId = parts[3];
+        const deviceMacAddress = parts[3];
         const messageType = parts[4];
 
         const user = users.get(userUuid);
         if (!user) return;
 
-        const device = user.devices.find((d) => d.id === deviceId);
+        const device = user.devices.find((d) => d.macAddress === deviceMacAddress);
         const deviceName = device ? device.name : "Unknown";
 
         // Handle telemetry messages
         if (messageType === "telemetry") {
             // Store telemetry in database
-            storeTelemetry(userUuid, deviceId, deviceName, msg)
+            storeTelemetry(userUuid, deviceMacAddress, deviceName, msg)
                 .then((result) => {
                     console.log(`[TELEMETRY] Stored ${result.recordCount} reading(s) for ${deviceName}`);
 
                     // Broadcast telemetry to frontend via Socket.IO
                     io.to(userUuid).emit("telemetry", {
-                        deviceId,
+                        macAddress: deviceMacAddress,
                         deviceName,
                         message: msg,
                         timestamp: new Date().toISOString()
@@ -205,7 +280,7 @@ mqttClient.on("message", (topic, message) => {
 
                     // Send acknowledgment command to device
                     if (result.messageId) {
-                        const ackTopic = `/${userUuid}/devices/${deviceId}/commands`;
+                        const ackTopic = `/${userUuid}/devices/${deviceMacAddress}/commands`;
                         const ackMessage = JSON.stringify({
                             type: "ack",
                             messageId: result.messageId,
@@ -224,7 +299,7 @@ mqttClient.on("message", (topic, message) => {
                     try {
                         const data = JSON.parse(msg);
                         if (data.messageId) {
-                            const ackTopic = `/${userUuid}/devices/${deviceId}/commands`;
+                            const ackTopic = `/${userUuid}/devices/${deviceMacAddress}/commands`;
                             const ackMessage = JSON.stringify({
                                 type: "ack",
                                 messageId: data.messageId,
@@ -252,7 +327,7 @@ mqttClient.on("message", (topic, message) => {
 
             const alarm = {
                 userUuid,
-                deviceId,
+                macAddress: deviceMacAddress,
                 deviceName,
                 severity: alarmData.severity || "info",
                 message: alarmData.message || msg,
@@ -268,13 +343,13 @@ mqttClient.on("message", (topic, message) => {
 
         // Handle image messages
         if (messageType === "images") {
-            handleImageMessage(userUuid, deviceId, deviceName, msg)
+            handleImageMessage(userUuid, deviceMacAddress, deviceName, msg)
                 .then((result) => {
                     console.log(`[IMAGE] Stored image from ${deviceName}: ${result.imageId}`);
 
                     // Broadcast image notification to frontend
                     io.to(userUuid).emit("image", {
-                        deviceId,
+                        macAddress: deviceMacAddress,
                         deviceName,
                         imageId: result.imageId,
                         metadata: result.metadata,
@@ -302,7 +377,7 @@ mqttClient.on("message", (topic, message) => {
 // Store telemetry in database
 // Expected format: {"sensor": "temperature", "value": 25.5, "unit": "°C", "isBatch": false, "messageId": "msg-123"}
 // Batch format: {"sensor": "temperature", "value": [[timestamp, value], ...], "unit": "°C", "isBatch": true, "messageId": "msg-123"}
-async function storeTelemetry(userUuid, deviceId, deviceName, message) {
+async function storeTelemetry(userUuid, deviceMacAddress, deviceName, message) {
     let data;
     try {
         data = JSON.parse(message);
@@ -333,9 +408,9 @@ async function storeTelemetry(userUuid, deviceId, deviceName, message) {
                 const tsDate = new Date(timestamp);
 
                 await pool.query(
-                    `INSERT INTO telemetry (user_uuid, device_id, device_name, sensor_name, message, value, unit, timestamp, message_id) 
+                    `INSERT INTO telemetry (user_uuid, device_mac_address, device_name, sensor_name, message, value, unit, timestamp, message_id) 
                      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-                    [userUuid, deviceId, deviceName, sensorName, JSON.stringify(entry), parsedValue, unit, tsDate, messageId]
+                    [userUuid, deviceMacAddress, deviceName, sensorName, JSON.stringify(entry), parsedValue, unit, tsDate, messageId]
                 );
             }
         } else {
@@ -343,9 +418,9 @@ async function storeTelemetry(userUuid, deviceId, deviceName, message) {
             const parsedValue = typeof data.value === 'number' ? data.value : parseFloat(data.value);
 
             await pool.query(
-                `INSERT INTO telemetry (user_uuid, device_id, device_name, sensor_name, message, value, unit, timestamp, message_id) 
+                `INSERT INTO telemetry (user_uuid, device_mac_address, device_name, sensor_name, message, value, unit, timestamp, message_id) 
                  VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8)`,
-                [userUuid, deviceId, deviceName, sensorName, JSON.stringify(data), parsedValue, unit, messageId]
+                [userUuid, deviceMacAddress, deviceName, sensorName, JSON.stringify(data), parsedValue, unit, messageId]
             );
         }
 
@@ -359,9 +434,9 @@ async function storeTelemetry(userUuid, deviceId, deviceName, message) {
 // Store alarm in database
 async function storeAlarm(alarm) {
     await pool.query(
-        `INSERT INTO alarms (user_uuid, device_id, device_name, severity, message, timestamp) 
+        `INSERT INTO alarms (user_uuid, device_mac_address, device_name, severity, message, timestamp) 
          VALUES ($1, $2, $3, $4, $5, NOW())`,
-        [alarm.userUuid, alarm.deviceId, alarm.deviceName, alarm.severity, alarm.message]
+        [alarm.userUuid, alarm.macAddress, alarm.deviceName, alarm.severity, alarm.message]
     );
 }
 
@@ -375,7 +450,7 @@ if (!fs.existsSync(IMAGES_DIR)) {
     console.log(`[IMAGES] Created images directory: ${IMAGES_DIR}`);
 }
 
-async function handleImageMessage(userUuid, deviceId, deviceName, message) {
+async function handleImageMessage(userUuid, deviceMacAddress, deviceName, message) {
     let data;
     try {
         data = JSON.parse(message);
@@ -397,7 +472,7 @@ async function handleImageMessage(userUuid, deviceId, deviceName, message) {
         // Generate unique filename
         const timestamp = Date.now();
         const extension = metadata.format || 'png';
-        const filename = `${userUuid}_${deviceId}_${imageId}_${timestamp}.${extension}`;
+        const filename = `${userUuid}_${deviceMacAddress}_${imageId}_${timestamp}.${extension}`;
         const filepath = path.join(IMAGES_DIR, filename);
 
         // Decode base64 and save to file
@@ -409,9 +484,9 @@ async function handleImageMessage(userUuid, deviceId, deviceName, message) {
 
         // Store only metadata and file path in database
         await pool.query(
-            `INSERT INTO images (user_uuid, device_id, device_name, image_id, file_path, file_size, metadata, timestamp, message_id) 
+            `INSERT INTO images (user_uuid, device_mac_address, device_name, image_id, file_path, file_size, metadata, timestamp, message_id) 
              VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8)`,
-            [userUuid, deviceId, deviceName, imageId, filename, fileSize, JSON.stringify(metadata), messageId]
+            [userUuid, deviceMacAddress, deviceName, imageId, filename, fileSize, JSON.stringify(metadata), messageId]
         );
 
         return { success: true, imageId, messageId, metadata, filename, fileSize };
@@ -431,9 +506,6 @@ app.post("/create-user", (req, res) => {
     const uuid = uuidv4();
     const user = { username, uuid, devices: [] };
     users.set(uuid, user);
-
-    // persist newly created user so devices (and user) survive restarts
-    saveUsers(Array.from(users.values()));
 
     res.json({ username, uuid });
 });
@@ -548,19 +620,22 @@ app.get("/devices/:uuid", (req, res) => {
 });
 
 app.post("/add-device", async (req, res) => {
-    const { userUuid, deviceName } = req.body;
-    if (!deviceName) return res.status(400).json({ error: "Device name required" });
+    const { userUuid, deviceName, macAddress } = req.body;
+    if (!deviceName || !macAddress) return res.status(400).json({ error: "Device name and MAC address required" });
 
     const user = users.get(userUuid);
     if (!user) return res.status(404).json({ error: "User not found" });
 
-    const device = { id: uuidv4(), name: deviceName };
+    // Convert MAC address format (replace : with _)
+    const deviceMacAddress = macAddress.replace(/:/g, '_');
+    
+    const device = { macAddress: deviceMacAddress, name: deviceName };
 
     try {
         // Save to database
         await pool.query(
-            'INSERT INTO devices (id, user_uuid, name) VALUES ($1, $2, $3)',
-            [device.id, userUuid, deviceName]
+            'INSERT INTO devices (mac_address, user_uuid, name) VALUES ($1, $2, $3)',
+            [deviceMacAddress, userUuid, deviceName]
         );
 
         // Add to in-memory user
@@ -574,17 +649,17 @@ app.post("/add-device", async (req, res) => {
 });
 
 app.post("/publish", (req, res) => {
-    const { userUuid, deviceId, message } = req.body;
+    const { userUuid, macAddress, message } = req.body;
     if (!message) return res.status(400).json({ error: "Message required" });
 
     const user = users.get(userUuid);
     if (!user) return res.status(404).json({ error: "User not found" });
 
-    if (deviceId) {
-        mqttClient.publish(`/${userUuid}/devices/${deviceId}/commands`, message);
+    if (macAddress) {
+        mqttClient.publish(`/${userUuid}/devices/${macAddress}/commands`, message);
     } else {
         user.devices.forEach((d) => {
-            mqttClient.publish(`/${userUuid}/devices/${d.id}/commands`, message);
+            mqttClient.publish(`/${userUuid}/devices/${d.macAddress}/commands`, message);
         });
     }
 
@@ -592,8 +667,8 @@ app.post("/publish", (req, res) => {
 });
 
 // Get telemetry data for a device
-app.get("/telemetry/:userUuid/:deviceId", async (req, res) => {
-    const { userUuid, deviceId } = req.params;
+app.get("/telemetry/:userUuid/:macAddress", async (req, res) => {
+    const { userUuid, macAddress } = req.params;
     const limit = parseInt(req.query.limit || "100");
     const hours = parseInt(req.query.hours || "24");
     const sensorName = req.query.sensor;
@@ -607,10 +682,10 @@ app.get("/telemetry/:userUuid/:deviceId", async (req, res) => {
     }
 
     try {
-        let query = `SELECT id, device_id, device_name, sensor_name, message, value, unit, timestamp 
+        let query = `SELECT id, device_mac_address, device_name, sensor_name, message, value, unit, timestamp 
              FROM telemetry 
-             WHERE user_uuid = $1 AND device_id = $2 AND timestamp > NOW() - make_interval(hours => $3)`;
-        const params = [userUuid, deviceId, hours];
+             WHERE user_uuid = $1 AND device_mac_address = $2 AND timestamp > NOW() - make_interval(hours => $3)`;
+        const params = [userUuid, macAddress, hours];
 
         if (sensorName) {
             query += ` AND sensor_name = $4`;
@@ -631,8 +706,8 @@ app.get("/telemetry/:userUuid/:deviceId", async (req, res) => {
 });
 
 // Get list of sensors for a device
-app.get("/sensors/:userUuid/:deviceId", async (req, res) => {
-    const { userUuid, deviceId } = req.params;
+app.get("/sensors/:userUuid/:macAddress", async (req, res) => {
+    const { userUuid, macAddress } = req.params;
 
     try {
         const result = await pool.query(
@@ -640,10 +715,10 @@ app.get("/sensors/:userUuid/:deviceId", async (req, res) => {
              COUNT(*) as reading_count,
              MAX(timestamp) as last_reading
              FROM telemetry 
-             WHERE user_uuid = $1 AND device_id = $2 AND sensor_name IS NOT NULL
+             WHERE user_uuid = $1 AND device_mac_address = $2 AND sensor_name IS NOT NULL
              GROUP BY sensor_name
              ORDER BY sensor_name`,
-            [userUuid, deviceId]
+            [userUuid, macAddress]
         );
         res.json(result.rows);
     } catch (err) {
@@ -668,7 +743,7 @@ app.get("/telemetry/:userUuid", async (req, res) => {
 
     try {
         const result = await pool.query(
-            `SELECT id, device_id, device_name, message, value, unit, timestamp 
+            `SELECT id, device_mac_address, device_name, message, value, unit, timestamp 
              FROM telemetry 
              WHERE user_uuid = $1 AND timestamp > NOW() - make_interval(hours => $2)
              ORDER BY timestamp DESC 
@@ -689,7 +764,7 @@ app.get("/alarms/:userUuid", async (req, res) => {
     const acknowledged = req.query.acknowledged;
 
     try {
-        let query = `SELECT id, device_id, device_name, severity, message, acknowledged, acknowledged_at, timestamp 
+        let query = `SELECT id, device_mac_address, device_name, severity, message, acknowledged, acknowledged_at, timestamp 
                      FROM alarms 
                      WHERE user_uuid = $1`;
         const params = [userUuid];
@@ -728,18 +803,18 @@ app.post("/alarms/:alarmId/acknowledge", async (req, res) => {
 
 // Get images for a device
 // Get list of images (metadata only)
-app.get("/images/:userUuid/:deviceId", async (req, res) => {
-    const { userUuid, deviceId } = req.params;
+app.get("/images/:userUuid/:macAddress", async (req, res) => {
+    const { userUuid, macAddress } = req.params;
     const limit = parseInt(req.query.limit || "20");
 
     try {
         const result = await pool.query(
             `SELECT id, image_id, device_name, file_path, file_size, metadata, timestamp, message_id
              FROM images 
-             WHERE user_uuid = $1 AND device_id = $2
+             WHERE user_uuid = $1 AND device_mac_address = $2
              ORDER BY timestamp DESC 
              LIMIT $3`,
-            [userUuid, deviceId, limit]
+            [userUuid, macAddress, limit]
         );
         res.json(result.rows);
     } catch (err) {
@@ -749,16 +824,16 @@ app.get("/images/:userUuid/:deviceId", async (req, res) => {
 });
 
 // Serve actual image file
-app.get("/images/:userUuid/:deviceId/:imageId/file", async (req, res) => {
-    const { userUuid, deviceId, imageId } = req.params;
+app.get("/images/:userUuid/:macAddress/:imageId/file", async (req, res) => {
+    const { userUuid, macAddress, imageId } = req.params;
 
     try {
         const result = await pool.query(
             `SELECT file_path, metadata FROM images 
-             WHERE user_uuid = $1 AND device_id = $2 AND image_id = $3
+             WHERE user_uuid = $1 AND device_mac_address = $2 AND image_id = $3
              ORDER BY timestamp DESC
              LIMIT 1`,
-            [userUuid, deviceId, imageId]
+            [userUuid, macAddress, imageId]
         );
 
         if (result.rows.length === 0) {
@@ -788,15 +863,15 @@ app.get("/images/:userUuid/:deviceId/:imageId/file", async (req, res) => {
 });
 
 // Get a specific image
-app.get("/images/:userUuid/:deviceId/:imageId", async (req, res) => {
-    const { userUuid, deviceId, imageId } = req.params;
+app.get("/images/:userUuid/:macAddress/:imageId", async (req, res) => {
+    const { userUuid, macAddress, imageId } = req.params;
 
     try {
         const result = await pool.query(
             `SELECT image_id, device_name, image_data, metadata, timestamp
              FROM images 
-             WHERE user_uuid = $1 AND device_id = $2 AND image_id = $3`,
-            [userUuid, deviceId, imageId]
+             WHERE user_uuid = $1 AND device_mac_address = $2 AND image_id = $3`,
+            [userUuid, macAddress, imageId]
         );
 
         if (result.rows.length === 0) {
@@ -819,8 +894,8 @@ app.get("/images/:userUuid/:deviceId/:imageId", async (req, res) => {
 
 // PUT endpoint for uploading images (alternative to MQTT)
 // Expected body: { "imageId": "img-123", "imageData": "base64...", "metadata": {...} }
-app.put("/images/:userUuid/:deviceId", async (req, res) => {
-    const { userUuid, deviceId } = req.params;
+app.put("/images/:userUuid/:macAddress", async (req, res) => {
+    const { userUuid, macAddress } = req.params;
     const { imageId, imageData, metadata } = req.body;
 
     // Validate user exists
@@ -830,7 +905,7 @@ app.put("/images/:userUuid/:deviceId", async (req, res) => {
     }
 
     // Validate device exists for user
-    const device = user.devices.find((d) => d.id === deviceId);
+    const device = user.devices.find((d) => d.macAddress === macAddress);
     if (!device) {
         return res.status(404).json({ error: "Device not found" });
     }
@@ -844,7 +919,7 @@ app.put("/images/:userUuid/:deviceId", async (req, res) => {
         // Generate unique filename
         const timestamp = Date.now();
         const extension = metadata?.format || 'png';
-        const filename = `${userUuid}_${deviceId}_${imageId}_${timestamp}.${extension}`;
+        const filename = `${userUuid}_${macAddress}_${imageId}_${timestamp}.${extension}`;
         const filepath = path.join(IMAGES_DIR, filename);
 
         // Decode base64 and save to file
@@ -856,14 +931,14 @@ app.put("/images/:userUuid/:deviceId", async (req, res) => {
 
         // Store metadata and file path in database
         await pool.query(
-            `INSERT INTO images (user_uuid, device_id, device_name, image_id, file_path, file_size, metadata, timestamp, message_id) 
+            `INSERT INTO images (user_uuid, device_mac_address, device_name, image_id, file_path, file_size, metadata, timestamp, message_id) 
              VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8)`,
-            [userUuid, deviceId, device.name, imageId, filename, fileSize, JSON.stringify(metadata || {}), null]
+            [userUuid, macAddress, device.name, imageId, filename, fileSize, JSON.stringify(metadata || {}), null]
         );
 
         // Broadcast image notification to frontend via Socket.IO
         io.to(userUuid).emit("image", {
-            deviceId,
+            macAddress,
             deviceName: device.name,
             imageId,
             metadata: metadata || {},

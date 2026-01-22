@@ -2,13 +2,13 @@ import { useState, useEffect } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
 
 type Device = {
-    id: string;
+    macAddress: string;
     name: string;
 };
 
 type TelemetryData = {
     id: number;
-    device_id: string;
+    device_mac_address: string;
     device_name: string;
     sensor_name: string | null;
     message: string;
@@ -25,7 +25,7 @@ type SensorInfo = {
 
 type ImageData = {
     id: number;
-    device_id: string;
+    device_mac_address: string;
     device_name: string;
     image_id: string;
     file_path: string;
@@ -59,11 +59,11 @@ export default function DeviceDashboard({ device, userUuid, backendUrl }: Props)
             fetchImages();
         }, 5000); // Refresh every 5 seconds
         return () => clearInterval(interval);
-    }, [device.id, timeRange, selectedSensor]);
+    }, [device.macAddress, timeRange, selectedSensor]);
 
     const fetchSensors = async () => {
         try {
-            const res = await fetch(`${backendUrl}/sensors/${userUuid}/${device.id}`);
+            const res = await fetch(`${backendUrl}/sensors/${userUuid}/${device.macAddress}`);
             const data = await res.json();
             setSensors(data);
         } catch (err) {
@@ -73,7 +73,7 @@ export default function DeviceDashboard({ device, userUuid, backendUrl }: Props)
 
     const fetchTelemetry = async () => {
         try {
-            let url = `${backendUrl}/telemetry/${userUuid}/${device.id}?hours=${timeRange}&limit=200`;
+            let url = `${backendUrl}/telemetry/${userUuid}/${device.macAddress}?hours=${timeRange}&limit=200`;
             if (selectedSensor) {
                 url += `&sensor=${encodeURIComponent(selectedSensor)}`;
             }
@@ -87,7 +87,7 @@ export default function DeviceDashboard({ device, userUuid, backendUrl }: Props)
 
     const fetchImages = async () => {
         try {
-            const res = await fetch(`${backendUrl}/images/${userUuid}/${device.id}?limit=20`);
+            const res = await fetch(`${backendUrl}/images/${userUuid}/${device.macAddress}?limit=20`);
             if (!res.ok) throw new Error('Failed to fetch images');
             const data = await res.json();
             setImages(data);
@@ -106,7 +106,7 @@ export default function DeviceDashboard({ device, userUuid, backendUrl }: Props)
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                     userUuid,
-                    deviceId: device.id,
+                    macAddress: device.macAddress,
                     message: command,
                 }),
             });
@@ -418,7 +418,7 @@ export default function DeviceDashboard({ device, userUuid, backendUrl }: Props)
                                         onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1)'}
                                     >
                                         <img
-                                            src={`${backendUrl}/images/${userUuid}/${device.id}/${img.image_id}/file`}
+                                            src={`${backendUrl}/images/${userUuid}/${device.macAddress}/${img.image_id}/file`}
                                             alt={img.image_id}
                                             style={{
                                                 width: '100%',
@@ -464,7 +464,7 @@ export default function DeviceDashboard({ device, userUuid, backendUrl }: Props)
                                         >×</button>
                                     </div>
                                     <img
-                                        src={`${backendUrl}/images/${userUuid}/${device.id}/${selectedImage.image_id}/file`}
+                                        src={`${backendUrl}/images/${userUuid}/${device.macAddress}/${selectedImage.image_id}/file`}
                                         alt={selectedImage.image_id}
                                         style={{
                                             maxWidth: '100%',

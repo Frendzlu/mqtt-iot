@@ -151,7 +151,7 @@ Content-Type: application/json
 
 {
   "userUuid": "ef63df7a-e80c-49e1-b526-1b69f9ad93c2",
-  "deviceId": "device-001",
+  "macAddress": "00_11_22_33_44_55",
   "deviceName": "Temperature Sensor"
 }
 ```
@@ -163,7 +163,7 @@ Content-Type: application/json
 
 {
   "userUuid": "ef63df7a-e80c-49e1-b526-1b69f9ad93c2",
-  "deviceId": "device-001",
+  "macAddress": "00_11_22_33_44_55",
   "message": "reboot"
 }
 ```
@@ -172,7 +172,7 @@ Content-Type: application/json
 
 #### Get Device Telemetry
 ```http
-GET /telemetry/:userUuid/:deviceId?limit=100&sensor=temperature
+GET /telemetry/:userUuid/:macAddress?limit=100&sensor=temperature
 ```
 
 Query Parameters:
@@ -238,7 +238,7 @@ POST /alarms/:alarmId/acknowledge
 
 #### Get Device Images (Metadata)
 ```http
-GET /images/:userUuid/:deviceId?limit=20
+GET /images/:userUuid/:macAddress?limit=20
 ```
 
 **Response:**
@@ -248,7 +248,7 @@ GET /images/:userUuid/:deviceId?limit=20
     "id": 1,
     "image_id": "img-001",
     "device_name": "Camera Sensor",
-    "file_path": "uuid_deviceId_imageId_timestamp.png",
+    "file_path": "uuid_macAddress_imageId_timestamp.png",
     "file_size": "3562844",
     "metadata": {
       "width": 1888,
@@ -263,7 +263,7 @@ GET /images/:userUuid/:deviceId?limit=20
 
 #### Get Image File
 ```http
-GET /images/:userUuid/:deviceId/:imageId/file
+GET /images/:userUuid/:macAddress/:imageId/file
 ```
 
 Returns the actual image file with appropriate `Content-Type` header.
@@ -272,7 +272,7 @@ Returns the actual image file with appropriate `Content-Type` header.
 
 ### Topic Pattern
 ```
-/{userUuid}/devices/{deviceId}/{messageType}
+/{userUuid}/devices/{macAddress}/{messageType}
 ```
 
 ### Message Types
@@ -286,11 +286,12 @@ Returns the actual image file with appropriate `Content-Type` header.
 JSON Format:
 ```json
 {
-  "name": "My Device Name"
+  "name": "My Device Name",
+  "macAddress": "00:11:22:33:44:55"
 }
 ```
 
-Plain Text Format:
+Plain Text Format (deprecated):
 ```
 My Device Name
 ```
@@ -303,8 +304,8 @@ My Device Name
 ```json
 {
   "name": "My Device Name",
-  "uuid": "generated-device-uuid",
-  "status": "created|existing|error",
+  "macAddress": "00_11_22_33_44_55",
+  "status": "created|existing|reassigned|error",
   "timestamp": "2026-01-22T10:15:00Z",
   "error": "Error message (only if status is error)"
 }
@@ -315,7 +316,7 @@ My Device Name
 # Device sends registration request
 mosquitto_pub -h localhost -u <userUuid> -P <password> \
   -t "/<userUuid>/devices" \
-  -m '{"name":"Temperature Sensor v2"}'
+  -m '{"name":"Temperature Sensor v2","macAddress":"00:11:22:33:44:55"}'
 
 # Device subscribes to response topic
 mosquitto_sub -h localhost -u <userUuid> -P <password> \
@@ -323,14 +324,15 @@ mosquitto_sub -h localhost -u <userUuid> -P <password> \
 ```
 
 **Behavior:**
-- If a device with the same name already exists, returns the existing UUID with status "existing"
-- If new device, creates it in the database and returns new UUID with status "created" 
-- If error occurs, returns status "error" with error message
-- Frontend is notified in real-time via Socket.IO when new devices are registered
+- MAC address format is converted from `00:11:22:33:44:55` to `00_11_22_33_44_55` for MQTT topics
+- If device with same MAC exists for another user, it will be reassigned to the registering user
+- If device with same MAC exists for same user, updates device name if different
+- If new device, creates it in the database and returns status "created"
+- Frontend is notified in real-time via Socket.IO when devices are registered/reassigned
 
 #### 2. Telemetry (Device to Backend)
 
-**Topic:** `/{userUuid}/devices/{deviceId}/telemetry`
+**Topic:** `/{userUuid}/devices/{macAddress}/telemetry`
 
 **Single Reading:**
 ```json
@@ -361,13 +363,13 @@ mosquitto_sub -h localhost -u <userUuid> -P <password> \
 **Mosquitto Example:**
 ```bash
 mosquitto_pub -h localhost -u <userUuid> -P <password> \
-  -t "/<userUuid>/devices/<deviceId>/telemetry" \
+  -t "/<userUuid>/devices/<macAddress>/telemetry" \
   -m '{"sensor":"temperature","value":25.5,"unit":"C","isBatch":false,"messageId":"msg-123"}'
 ```
 
 #### 3. Commands/Acknowledgments (Backend to Device)
 
-**Topic:** `/{userUuid}/devices/{deviceId}/commands`
+**Topic:** `/{userUuid}/devices/{macAddress}/commands`
 
 **Acknowledgment Format:**
 ```json
@@ -383,12 +385,12 @@ mosquitto_pub -h localhost -u <userUuid> -P <password> \
 **Subscribe Example:**
 ```bash
 mosquitto_sub -h localhost -u <userUuid> -P <password> \
-  -t "/<userUuid>/devices/<deviceId>/commands"
+  -t "/<userUuid>/devices/<macAddress>/commands"
 ```
 
 #### 4. Images (Device to Backend)
 
-**Topic:** `/{userUuid}/devices/{deviceId}/images`
+**Topic:** `/{userUuid}/devices/{macAddress}/images`
 
 **Message Format:**
 ```json
@@ -408,7 +410,7 @@ mosquitto_sub -h localhost -u <userUuid> -P <password> \
 **Send Image Example:**
 ```bash
 mosquitto_pub -h localhost -u <userUuid> -P <password> \
-  -t "/<userUuid>/devices/<deviceId>/images" \
+  -t "/<userUuid>/devices/<macAddress>/images" \
   -m '{"imageId":"img-789","messageId":"msg-img-789","data":"'$(base64 -w 0 image.jpg)'","metadata":{"contentType":"image/jpeg"}}'
 ```
 
@@ -416,7 +418,7 @@ Images are stored in the Docker volume `images_storage` and served via the API.
 
 #### 5. Alarms (Device to Backend)
 
-**Topic:** `/{userUuid}/devices/{deviceId}/alarms`
+**Topic:** `/{userUuid}/devices/{macAddress}/alarms`
 
 **Message Format:**
 ```json
@@ -431,7 +433,7 @@ Images are stored in the Docker volume `images_storage` and served via the API.
 **Send Alarm Example:**
 ```bash
 mosquitto_pub -h localhost -u <userUuid> -P <password> \
-  -t "/<userUuid>/devices/<deviceId>/alarms" \
+  -t "/<userUuid>/devices/<macAddress>/alarms" \
   -m '{"severity":"critical","message":"Temperature exceeded 50C"}'
 ```
 
@@ -579,7 +581,7 @@ docker compose up --build
 - Ensure no firewall is blocking connections
 
 ### No Data in Charts
-- Verify devices are publishing to correct topics: `/{uuid}/devices/{deviceId}/telemetry`
+- Verify devices are publishing to correct topics: `/{uuid}/devices/{macAddress}/telemetry`
 - Check message format matches the JSON specification
 - Ensure numeric values are parseable
 - Check time range selector in the dashboard
