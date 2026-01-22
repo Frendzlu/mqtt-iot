@@ -73,7 +73,7 @@ export default function AlarmsPanel({ alarms, onAcknowledge, onClose }: Props) {
                             <div key={alarm.id} className={`alarm-item ${getSeverityClass(alarm.severity)}`}>
                                 <div className="alarm-header">
                                     <span className="alarm-icon">{getSeverityIcon(alarm.severity)}</span>
-                                    <span className="alarm-device">{alarm.device_name || alarm.device_id}</span>
+                                    <span className="alarm-device">{alarm.device_name || alarm.device_mac_address}</span>
                                     <span className={`alarm-severity ${getSeverityClass(alarm.severity)}`}>
                                         {alarm.severity.toUpperCase()}
                                     </span>
@@ -104,7 +104,7 @@ export default function AlarmsPanel({ alarms, onAcknowledge, onClose }: Props) {
                             <div key={alarm.id} className={`alarm-item acknowledged ${getSeverityClass(alarm.severity)}`}>
                                 <div className="alarm-header">
                                     <span className="alarm-icon">{getSeverityIcon(alarm.severity)}</span>
-                                    <span className="alarm-device">{alarm.device_name || alarm.device_id}</span>
+                                    <span className="alarm-device">{alarm.device_name || alarm.device_mac_address}</span>
                                     <span className={`alarm-severity ${getSeverityClass(alarm.severity)}`}>
                                         {alarm.severity.toUpperCase()}
                                     </span>

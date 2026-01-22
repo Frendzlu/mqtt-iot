@@ -187,7 +187,7 @@ export default function DeviceDashboard({ device, userUuid, backendUrl }: Props)
             <div className="dashboard-header">
                 <div>
                     <h2>📱 {device.name}</h2>
-                    <p className="device-id">ID: {device.id}</p>
+                    <p className="device-id">MAC: {device.macAddress}</p>
                 </div>
                 <div className="header-controls">
                     {sensors.length > 0 && (

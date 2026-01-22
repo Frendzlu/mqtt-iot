@@ -112,11 +112,11 @@ mqttClient.on("message", async (topic, message) => {
             registrationData = { name: msg };
         }
 
-        const deviceName = registrationData.name;
+        const deviceName = registrationData.name || `Device-${macAddress}`;
         const macAddress = registrationData.macAddress;
         
-        if (!deviceName || !macAddress) {
-            console.warn(`[DEVICE-REGISTER] Device name and MAC address required in message: ${msg}`);
+        if (!macAddress) {
+            console.warn(`[DEVICE-REGISTER] MAC address required in message: ${msg}`);
             return;
         }
 
@@ -138,10 +138,11 @@ mqttClient.on("message", async (topic, message) => {
 
         if (existingDevice && existingUser && existingUser.uuid !== userUuid) {
             // Device exists for another user - reassign it
+            // Historical data stays with the old user, new data goes to new user
             console.log(`[DEVICE-REGISTER] Reassigning device ${deviceMacAddress} from user ${existingUser.username} to ${user.username}`);
             
             try {
-                // Remove from old user in database and memory
+                // Update device ownership in database (but leave historical data with old user)
                 await pool.query('UPDATE devices SET user_uuid = $1, name = $2 WHERE mac_address = $3', [userUuid, deviceName, deviceMacAddress]);
                 
                 // Update in-memory data
@@ -149,7 +150,7 @@ mqttClient.on("message", async (topic, message) => {
                 const reassignedDevice = { macAddress: deviceMacAddress, name: deviceName };
                 user.devices.push(reassignedDevice);
                 
-                console.log(`[DEVICE-REGISTER] Reassigned device: ${deviceName} (${deviceMacAddress}) to user ${user.username}`);
+                console.log(`[DEVICE-REGISTER] Reassigned device: ${deviceName} (${deviceMacAddress}) to user ${user.username}. Historical data remains with ${existingUser.username}`);
                 
                 // Send response back to device
                 const responseTopic = `/${userUuid}/devices/register-response`;
@@ -183,26 +184,49 @@ mqttClient.on("message", async (topic, message) => {
                 return;
             }
         } else if (existingDevice && existingUser && existingUser.uuid === userUuid) {
-            // Device already exists for this user - just update the name if different
+            // Device already exists for this user
             if (existingDevice.name !== deviceName) {
+                // Update device name only
                 try {
                     await pool.query('UPDATE devices SET name = $1 WHERE mac_address = $2', [deviceName, deviceMacAddress]);
                     existingDevice.name = deviceName;
                     console.log(`[DEVICE-REGISTER] Updated device name: ${deviceName} (${deviceMacAddress})`);
+                    
+                    // Send response back to device
+                    const responseTopic = `/${userUuid}/devices/register-response`;
+                    const responseMessage = JSON.stringify({
+                        name: deviceName,
+                        macAddress: deviceMacAddress,
+                        status: "name_updated",
+                        timestamp: new Date().toISOString()
+                    });
+                    mqttClient.publish(responseTopic, responseMessage);
                 } catch (err) {
                     console.error('[DEVICE-REGISTER] Database error updating device name:', err);
+                    const responseTopic = `/${userUuid}/devices/register-response`;
+                    const responseMessage = JSON.stringify({
+                        name: deviceName,
+                        macAddress: deviceMacAddress,
+                        status: "error",
+                        error: err.message,
+                        timestamp: new Date().toISOString()
+                    });
+                    mqttClient.publish(responseTopic, responseMessage);
                 }
+            } else {
+                // Both user and name match - do nothing
+                console.log(`[DEVICE-REGISTER] Device ${deviceName} (${deviceMacAddress}) already exists for user ${user.username} with same name - no changes needed`);
+                
+                // Send response back to device
+                const responseTopic = `/${userUuid}/devices/register-response`;
+                const responseMessage = JSON.stringify({
+                    name: deviceName,
+                    macAddress: deviceMacAddress,
+                    status: "unchanged",
+                    timestamp: new Date().toISOString()
+                });
+                mqttClient.publish(responseTopic, responseMessage);
             }
-            
-            // Send response back to device
-            const responseTopic = `/${userUuid}/devices/register-response`;
-            const responseMessage = JSON.stringify({
-                name: deviceName,
-                macAddress: deviceMacAddress,
-                status: "existing",
-                timestamp: new Date().toISOString()
-            });
-            mqttClient.publish(responseTopic, responseMessage);
             return;
         }
 
