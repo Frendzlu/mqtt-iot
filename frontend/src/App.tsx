@@ -26,8 +26,6 @@ export default function App() {
     const [uuid, setUuid] = useState("");
     const [password, setPassword] = useState("");
     const [devices, setDevices] = useState<Device[]>([]);
-    const [newDeviceName, setNewDeviceName] = useState("");
-    const [newDeviceMacAddress, setNewDeviceMacAddress] = useState("");
     const [alarms, setAlarms] = useState<Alarm[]>([]);
     const [unacknowledgedCount, setUnacknowledgedCount] = useState(0);
     const [selectedDevice, setSelectedDevice] = useState<Device | null>(null);
@@ -105,38 +103,6 @@ export default function App() {
             setUnacknowledgedCount(data.filter((a: Alarm) => !a.acknowledged).length);
         } catch (err) {
             console.error("Error fetching alarms:", err);
-        }
-    };
-
-    // Add a new device
-    const addDevice = async () => {
-        if (!newDeviceName || !newDeviceMacAddress) {
-            return alert("Device name and MAC address are required");
-        }
-        try {
-            const res = await fetch(`${backendUrl}/add-device`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    userUuid: uuid,
-                    deviceName: newDeviceName,
-                    macAddress: newDeviceMacAddress
-                }),
-            });
-            if (!res.ok) {
-                const err = await res.json();
-                return alert("Failed to add device: " + (err.error || JSON.stringify(err)));
-            }
-            const device = await res.json();
-            setDevices((prev) => [...prev, device]);
-            setNewDeviceName("");
-            setNewDeviceMacAddress("");
-            if (!selectedDevice) {
-                setSelectedDevice(device);
-            }
-        } catch (err) {
-            console.error("Error adding device:", err);
-            alert("Failed to add device");
         }
     };
 
@@ -273,26 +239,11 @@ export default function App() {
                                     <span className="device-name">{device.name}</span>
                                 </button>
                             ))}
-                        </div>
-
-                        <div className="add-device-form">
-                            <input
-                                placeholder="Device name"
-                                value={newDeviceName}
-                                onChange={(e) => setNewDeviceName(e.target.value)}
-                                className="input input-sm"
-                                style={{ marginBottom: '8px' }}
-                            />
-                            <input
-                                placeholder="MAC address (e.g., 00:11:22:33:44:55)"
-                                value={newDeviceMacAddress}
-                                onChange={(e) => setNewDeviceMacAddress(e.target.value)}
-                                className="input input-sm"
-                                onKeyPress={(e) => e.key === "Enter" && addDevice()}
-                            />
-                            <button onClick={addDevice} className="btn btn-sm btn-primary" style={{ marginTop: '8px' }}>
-                                + Add Device
-                            </button>
+                            {devices.length === 0 && (
+                                <p style={{ padding: '16px', textAlign: 'center', color: '#666' }}>
+                                    No devices yet. Devices auto-register via MQTT.
+                                </p>
+                            )}
                         </div>
                     </div>
 

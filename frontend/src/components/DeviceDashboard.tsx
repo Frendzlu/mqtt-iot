@@ -80,7 +80,11 @@ export default function DeviceDashboard({ device, userUuid, backendUrl, refreshT
             }
             const res = await fetch(url);
             const data = await res.json();
-            setTelemetry(data.reverse()); // Reverse to show oldest first for chart
+            console.log(`[TELEMETRY] Fetched ${data.length} records:`, data.slice(0, 3));
+            // Backend returns newest first (ORDER BY timestamp DESC), reverse for chart (oldest first)
+            const reversed = data.reverse();
+            setTelemetry(reversed);
+            console.log('[TELEMETRY] After reverse, latest 3:', reversed.slice(-3));
         } catch (err) {
             console.error("Failed to fetch telemetry:", err);
         }
@@ -164,19 +168,21 @@ export default function DeviceDashboard({ device, userUuid, backendUrl, refreshT
 
     // Get latest values for each sensor
     const getLatestValues = () => {
+        console.log(`[LATEST] Computing latest values from ${telemetry.length} telemetry records`);
         if (selectedSensor) {
-            const latest = telemetry
-                .filter((t) => t.sensor_name === selectedSensor)
-                .slice(-1)[0];
+            const filtered = telemetry.filter((t) => t.sensor_name === selectedSensor);
+            const latest = filtered.slice(-1)[0];
+            console.log(`[LATEST] Selected sensor "${selectedSensor}": ${filtered.length} records, latest:`, latest);
             return latest ? { [selectedSensor]: latest } : {};
         } else {
-            // Group by sensor and get latest for each
+            // Group by sensor and get latest for each (telemetry is oldest->newest, so last occurrence is latest)
             const latestBySensor: Record<string, TelemetryData> = {};
             telemetry.forEach((t) => {
                 if (t.sensor_name) {
                     latestBySensor[t.sensor_name] = t; // This will keep overwriting with newer values
                 }
             });
+            console.log('[LATEST] All sensors, latest values:', latestBySensor);
             return latestBySensor;
         }
     };
