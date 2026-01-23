@@ -1,13 +1,4 @@
-type Alarm = {
-    id: number;
-    device_mac_address: string;
-    device_name: string;
-    severity: string;
-    message: string;
-    acknowledged: boolean;
-    acknowledged_at: string | null;
-    timestamp: string;
-};
+import type { Alarm } from "../types";
 
 type Props = {
     alarms: Alarm[];

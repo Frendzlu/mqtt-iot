@@ -2,26 +2,16 @@ import { useState, useEffect } from "react";
 import { io, Socket } from "socket.io-client";
 import DeviceDashboard from "./components/DeviceDashboard";
 import AlarmsPanel from "./components/AlarmsPanel";
+import LoginForm from "./components/LoginForm";
+import type { Device, Alarm } from "./types";
+import { useApi } from "./hooks/useApi";
 import "./App.css";
 
-type Device = {
-    macAddress: string;
-    name: string;
-};
-
-type Alarm = {
-    id: number;
-    device_mac_address: string;
-    device_name: string;
-    severity: string;
-    message: string;
-    acknowledged: boolean;
-    acknowledged_at: string | null;
-    timestamp: string;
-};
-
 export default function App() {
-    const [backendUrl] = useState("http://localhost:3001");
+    const [backendUrl, setBackendUrl] = useState(() => {
+        return localStorage.getItem("backendUrl") || "http://localhost:3001";
+    });
+    const api = useApi(backendUrl);
     const [username, setUsername] = useState("");
     const [uuid, setUuid] = useState("");
     const [password, setPassword] = useState("");
@@ -33,92 +23,56 @@ export default function App() {
     const [socket, setSocket] = useState<Socket | null>(null);
     const [telemetryRefreshTrigger, setTelemetryRefreshTrigger] = useState(0);
 
-    // Register a new user
-    const register = async () => {
-        if (!username || !password) return alert("username and password required");
-        const res = await fetch(`${backendUrl}/register`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ username, password }),
-        });
-        if (!res.ok) {
-            const err = await res.json();
-            return alert("Register failed: " + (err.error || JSON.stringify(err)));
-        }
-        const data = await res.json();
+    const handleLoginSuccess = (data: { uuid: string; username: string; password: string }) => {
         setUuid(data.uuid);
+        setUsername(data.username);
+        setPassword(data.password);
+        setBackendUrl(localStorage.getItem("backendUrl") || "http://localhost:3001");
         fetchDevices(data.uuid);
         fetchAlarms(data.uuid);
         startTelemetry(data.uuid);
     };
 
-    const login = async () => {
-        if (!username || !password) return alert("username and password required");
-        const res = await fetch(`${backendUrl}/login`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ username, password }),
-        });
-        if (!res.ok) {
-            const err = await res.json();
-            return alert("Login failed: " + (err.error || JSON.stringify(err)));
+    // Logout function
+    const logout = () => {
+        setUuid("");
+        setUsername("");
+        setPassword("");
+        setDevices([]);
+        setAlarms([]);
+        setSelectedDevice(null);
+        setUnacknowledgedCount(0);
+        if (socket) {
+            socket.disconnect();
+            setSocket(null);
         }
-        const data = await res.json();
-        setUuid(data.uuid);
-        fetchDevices(data.uuid);
-        fetchAlarms(data.uuid);
-        startTelemetry(data.uuid);
     };
 
     // Fetch devices
     const fetchDevices = async (userUuid: string) => {
-        try {
-            const res = await fetch(`${backendUrl}/devices/${userUuid}`);
-            if (!res.ok) {
-                console.error("Failed to fetch devices:", res.statusText);
-                return;
-            }
-            const data = await res.json();
-            console.log(`[DEVICES] Fetched ${data.length} device(s):`, data);
-            setDevices(data);
-            if (data.length > 0 && !selectedDevice) {
-                setSelectedDevice(data[0]);
-                console.log('[DEVICES] Auto-selected first device:', data[0]);
-            }
-        } catch (err) {
-            console.error("Error fetching devices:", err);
+        const data = await api.fetchDevices(userUuid);
+        setDevices(data);
+        if (data.length > 0 && !selectedDevice) {
+            setSelectedDevice(data[0]);
+            console.log('[DEVICES] Auto-selected first device:', data[0]);
         }
     };
 
     // Fetch alarms
     const fetchAlarms = async (userUuid: string) => {
-        try {
-            const res = await fetch(`${backendUrl}/alarms/${userUuid}?limit=50`);
-            if (!res.ok) {
-                console.error("Failed to fetch alarms:", res.statusText);
-                return;
-            }
-            const data = await res.json();
-            setAlarms(data);
-            setUnacknowledgedCount(data.filter((a: Alarm) => !a.acknowledged).length);
-        } catch (err) {
-            console.error("Error fetching alarms:", err);
-        }
+        const data = await api.fetchAlarms(userUuid);
+        setAlarms(data);
+        setUnacknowledgedCount(data.filter((a: Alarm) => !a.acknowledged).length);
     };
 
     // Acknowledge an alarm
     const acknowledgeAlarm = async (alarmId: number) => {
-        try {
-            const res = await fetch(`${backendUrl}/alarms/${alarmId}/acknowledge`, {
-                method: "POST",
-            });
-            if (!res.ok) {
-                console.error("Failed to acknowledge alarm:", res.statusText);
-                return;
-            }
-            fetchAlarms(uuid);
-        } catch (err) {
-            console.error("Error acknowledging alarm:", err);
+        const success = await api.acknowledgeAlarm(alarmId);
+        if (success) {
+            // Immediately refresh alarms and update counts
+            await fetchAlarms(uuid);
+        } else {
+            console.error("Failed to acknowledge alarm");
         }
     };
 
@@ -168,101 +122,73 @@ export default function App() {
     }, [socket]);
 
     if (!uuid) {
-        return (
-            <div className="login-container">
-                <div className="login-card">
-                    <h1>🔌 MQTT IoT Dashboard</h1>
-                    <p className="subtitle">Manage your IoT devices and monitor telemetry in real-time</p>
-
-                    <div className="form-group">
-                        <input
-                            placeholder="Username"
-                            value={username}
-                            onChange={(e) => setUsername(e.target.value)}
-                            className="input"
-                        />
-                    </div>
-
-                    <div className="form-group">
-                        <input
-                            type="password"
-                            placeholder="Password"
-                            value={password}
-                            onChange={(e) => setPassword(e.target.value)}
-                            className="input"
-                            onKeyPress={(e) => e.key === "Enter" && login()}
-                        />
-                    </div>
-
-                    <div className="button-group">
-                        <button onClick={login} className="btn btn-primary">
-                            Login
-                        </button>
-                        <button onClick={register} className="btn btn-secondary">
-                            Register
-                        </button>
-                    </div>
-                </div>
-            </div>
-        );
+        return <LoginForm onLoginSuccess={handleLoginSuccess} />;
     }
 
     return (
         <div className="app-container">
             <header className="app-header">
-                <div className="header-left">
-                    <h1>🔌 MQTT IoT Dashboard</h1>
-                    <span className="user-badge">👤 {username}</span>
-                </div>
-                <div className="header-right">
-                    <button
-                        className={`btn-alarm ${unacknowledgedCount > 0 ? 'has-alarms' : ''}`}
-                        onClick={() => setShowAlarms(!showAlarms)}
-                    >
-                        🔔 Alarms {unacknowledgedCount > 0 && `(${unacknowledgedCount})`}
-                    </button>
-                </div>
-            </header>
-
+                    <div className="header-left">
+                        <h1>MQTT IoT Dashboard</h1>
+                        <span className="user-badge">👤 {username}</span>
+                    </div>
+                    
+                    <div className="header-right">
+                        <button
+                            className={`btn-alarm ${unacknowledgedCount > 0 ? 'has-alarms' : ''}`}
+                            onClick={() => setShowAlarms(!showAlarms)}
+                        >
+                            🔔 Alarms {unacknowledgedCount > 0 && `(${unacknowledgedCount})`}
+                        </button>
+                        <button
+                            className="btn btn-secondary"
+                            onClick={logout}
+                            style={{ marginLeft: '12px', padding: '8px 16px', fontSize: '14px' }}
+                        >
+                            Logout
+                        </button>
+                    </div>
+                
+                </header>
             <div className="main-content">
                 <aside className="sidebar">
-                    <div className="sidebar-section">
-                        <h3>Devices</h3>
-                        <div className="device-list">
-                            {devices.map((device) => (
-                                <button
-                                    key={device.macAddress}
-                                    className={`device-item ${selectedDevice?.macAddress === device.macAddress ? 'active' : ''}`}
-                                    onClick={() => setSelectedDevice(device)}
-                                >
-                                    <span className="device-icon">📱</span>
-                                    <span className="device-name">{device.name}</span>
-                                </button>
-                            ))}
-                            {devices.length === 0 && (
-                                <p style={{ padding: '16px', textAlign: 'center', color: '#666' }}>
-                                    No devices yet. Devices auto-register via MQTT.
-                                </p>
-                            )}
+                        <div className="sidebar-section">
+                            <h3>Devices</h3>
+                            <div className="device-list">
+                                {devices.map((device) => (
+                                    <button
+                                        key={device.macAddress}
+                                        className={`device-item ${selectedDevice?.macAddress === device.macAddress ? 'active' : ''}`}
+                                        onClick={() => setSelectedDevice(device)}
+                                    >
+                                        <span className="device-icon">📱</span>
+                                        <span className="device-name">{device.name}</span>
+                                    </button>
+                                ))}
+                                {devices.length === 0 && (
+                                    <p style={{ padding: '16px', textAlign: 'center', color: '#666' }}>
+                                        No devices yet. Devices auto-register via MQTT.
+                                    </p>
+                                )}
+                            </div>
                         </div>
-                    </div>
 
-                    <div className="sidebar-section mqtt-info">
-                        <h4>MQTT Credentials</h4>
-                        <div className="info-item">
-                            <span className="label">Username:</span>
-                            <code>{uuid}</code>
+                        <div className="sidebar-section mqtt-info">
+                            <h4>MQTT Credentials</h4>
+                            <div className="info-item">
+                                <span className="label">Username:</span>
+                                <code>{uuid}</code>
+                            </div>
+                            <div className="info-item">
+                                <span className="label">Password:</span>
+                                <code>{password || "(your password)"}</code>
+                            </div>
+                            <div className="info-item">
+                                <span className="label">Broker:</span>
+                                <code>localhost:1883</code>
+                            </div>
                         </div>
-                        <div className="info-item">
-                            <span className="label">Password:</span>
-                            <code>{password || "(your password)"}</code>
-                        </div>
-                        <div className="info-item">
-                            <span className="label">Broker:</span>
-                            <code>localhost:1883</code>
-                        </div>
-                    </div>
-                </aside>
+                    </aside>
 
                 <main className="content-area">
                     {showAlarms ? (

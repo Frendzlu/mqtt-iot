@@ -1,38 +1,8 @@
 import { useState, useEffect } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
-
-type Device = {
-    macAddress: string;
-    name: string;
-};
-
-type TelemetryData = {
-    id: number;
-    device_mac_address: string;
-    device_name: string;
-    sensor_name: string | null;
-    message: string;
-    value: number | null;
-    unit: string | null;
-    timestamp: string;
-};
-
-type SensorInfo = {
-    sensor_name: string;
-    reading_count: number;
-    last_reading: string;
-};
-
-type ImageData = {
-    id: number;
-    device_mac_address: string;
-    device_name: string;
-    image_id: string;
-    file_path: string;
-    file_size: number;
-    metadata: any;
-    timestamp: string;
-};
+import CommandBuilder from "./CommandBuilder";
+import type { Device, TelemetryData, SensorInfo, ImageData } from "../types";
+import { useApi } from "../hooks/useApi";
 
 type Props = {
     device: Device;
@@ -42,12 +12,14 @@ type Props = {
 };
 
 export default function DeviceDashboard({ device, userUuid, backendUrl, refreshTrigger }: Props) {
+    const api = useApi(backendUrl);
     const [telemetry, setTelemetry] = useState<TelemetryData[]>([]);
     const [sensors, setSensors] = useState<SensorInfo[]>([]);
     const [selectedSensor, setSelectedSensor] = useState<string | null>(null);
-    const [command, setCommand] = useState("");
     const [loading, setLoading] = useState(false);
     const [timeRange, setTimeRange] = useState(24);
+    const [customRange, setCustomRange] = useState({ start: "", end: "" });
+    const [isCustomRange, setIsCustomRange] = useState(false);
     const [images, setImages] = useState<ImageData[]>([]);
     const [selectedImage, setSelectedImage] = useState<ImageData | null>(null);
 
@@ -60,7 +32,7 @@ export default function DeviceDashboard({ device, userUuid, backendUrl, refreshT
             fetchImages();
         }, 5000); // Refresh every 5 seconds
         return () => clearInterval(interval);
-    }, [device.macAddress, timeRange, selectedSensor, refreshTrigger]);
+    }, [device.macAddress, timeRange, isCustomRange, customRange, selectedSensor, refreshTrigger]);
 
     const fetchSensors = async () => {
         try {
@@ -74,10 +46,20 @@ export default function DeviceDashboard({ device, userUuid, backendUrl, refreshT
 
     const fetchTelemetry = async () => {
         try {
-            let url = `${backendUrl}/telemetry/${userUuid}/${device.macAddress}?hours=${timeRange}&limit=200`;
+            let url = `${backendUrl}/telemetry/${userUuid}/${device.macAddress}?limit=200`;
+            
+            if (isCustomRange && customRange.start && customRange.end) {
+                // Custom date range
+                url += `&startDate=${encodeURIComponent(customRange.start)}&endDate=${encodeURIComponent(customRange.end)}`;
+            } else {
+                // Hours-based range (0 = all time)
+                url += `&hours=${timeRange}`;
+            }
+            
             if (selectedSensor) {
                 url += `&sensor=${encodeURIComponent(selectedSensor)}`;
             }
+            
             const res = await fetch(url);
             const data = await res.json();
             console.log(`[TELEMETRY] Fetched ${data.length} records:`, data.slice(0, 3));
@@ -101,8 +83,8 @@ export default function DeviceDashboard({ device, userUuid, backendUrl, refreshT
         }
     };
 
-    const sendCommand = async () => {
-        if (!command.trim()) return;
+    const sendCommand = async (commandText: string) => {
+        if (!commandText.trim()) return;
 
         setLoading(true);
         try {
@@ -112,15 +94,38 @@ export default function DeviceDashboard({ device, userUuid, backendUrl, refreshT
                 body: JSON.stringify({
                     userUuid,
                     macAddress: device.macAddress,
-                    message: command,
+                    message: commandText,
                 }),
             });
-            setCommand("");
         } catch (err) {
             console.error("Failed to send command:", err);
             alert("Failed to send command");
         }
         setLoading(false);
+    };
+
+    const deleteImage = async (imageId: string) => {
+        if (!confirm(`Are you sure you want to delete image ${imageId}?`)) {
+            return;
+        }
+
+        try {
+            const success = await api.deleteImage(userUuid, device.macAddress, imageId);
+            if (success) {
+                // Remove from local state immediately
+                setImages(prev => prev.filter(img => img.image_id !== imageId));
+                // Clear selected image if it was the deleted one
+                if (selectedImage?.image_id === imageId) {
+                    setSelectedImage(null);
+                }
+                console.log(`Successfully deleted image ${imageId}`);
+            } else {
+                alert(`Failed to delete image ${imageId}`);
+            }
+        } catch (err) {
+            console.error("Failed to delete image:", err);
+            alert(`Error deleting image: ${err}`);
+        }
     };
 
     // Prepare chart data
@@ -215,12 +220,43 @@ export default function DeviceDashboard({ device, userUuid, backendUrl, refreshT
                     )}
                     <div className="time-range-selector">
                         <label>Time Range: </label>
-                        <select value={timeRange} onChange={(e) => setTimeRange(Number(e.target.value))}>
+                        <select 
+                            value={isCustomRange ? "custom" : timeRange.toString()} 
+                            onChange={(e) => {
+                                if (e.target.value === "custom") {
+                                    setIsCustomRange(true);
+                                } else {
+                                    setIsCustomRange(false);
+                                    setTimeRange(Number(e.target.value));
+                                }
+                            }}
+                        >
                             <option value={1}>Last Hour</option>
                             <option value={6}>Last 6 Hours</option>
                             <option value={24}>Last 24 Hours</option>
                             <option value={168}>Last Week</option>
+                            <option value={0}>All Time</option>
+                            <option value="custom">Custom Range</option>
                         </select>
+                        
+                        {isCustomRange && (
+                            <div className="custom-date-range">
+                                <input
+                                    type="datetime-local"
+                                    placeholder="Start Date"
+                                    value={customRange.start}
+                                    onChange={(e) => setCustomRange(prev => ({ ...prev, start: e.target.value }))}
+                                    className="input-sm"
+                                />
+                                <input
+                                    type="datetime-local"
+                                    placeholder="End Date"
+                                    value={customRange.end}
+                                    onChange={(e) => setCustomRange(prev => ({ ...prev, end: e.target.value }))}
+                                    className="input-sm"
+                                />
+                            </div>
+                        )}
                     </div>
                 </div>
             </div>
@@ -328,7 +364,7 @@ export default function DeviceDashboard({ device, userUuid, backendUrl, refreshT
                                     />
                                     <Legend />
                                     <Line
-                                        type="monotone"
+                                        type={chartData[0]?.unit === 'bin' ? "stepAfter" : "monotone"}
                                         dataKey="value"
                                         stroke="#4f46e5"
                                         strokeWidth={2}
@@ -344,42 +380,7 @@ export default function DeviceDashboard({ device, userUuid, backendUrl, refreshT
 
                 {/* Command Card */}
                 <div className="card command-card">
-                    <h3>Send Command</h3>
-                    <div className="command-form">
-                        <textarea
-                            placeholder="Enter command for device..."
-                            value={command}
-                            onChange={(e) => setCommand(e.target.value)}
-                            rows={3}
-                            className="command-input"
-                            onKeyPress={(e) => {
-                                if (e.key === "Enter" && e.ctrlKey) {
-                                    sendCommand();
-                                }
-                            }}
-                        />
-                        <button onClick={sendCommand} disabled={loading || !command.trim()} className="btn btn-primary">
-                            {loading ? "Sending..." : "Send Command"}
-                        </button>
-                        <p className="hint">Press Ctrl+Enter to send</p>
-                    </div>
-                    <div className="command-examples">
-                        <p className="examples-title">Quick Commands:</p>
-                        <div className="example-buttons">
-                            <button onClick={() => setCommand("STATUS")} className="btn-example">
-                                STATUS
-                            </button>
-                            <button onClick={() => setCommand("RESET")} className="btn-example">
-                                RESET
-                            </button>
-                            <button onClick={() => setCommand('{"led":"on"}')} className="btn-example">
-                                LED ON
-                            </button>
-                            <button onClick={() => setCommand('{"led":"off"}')} className="btn-example">
-                                LED OFF
-                            </button>
-                        </div>
-                    </div>
+                    <CommandBuilder onSendCommand={sendCommand} loading={loading} />
                 </div>
 
                 {/* Recent Messages Card */}
@@ -419,11 +420,37 @@ export default function DeviceDashboard({ device, userUuid, backendUrl, refreshT
                                             padding: '8px',
                                             cursor: 'pointer',
                                             transition: 'transform 0.2s',
+                                            position: 'relative',
                                         }}
                                         onClick={() => setSelectedImage(img)}
                                         onMouseEnter={(e) => e.currentTarget.style.transform = 'scale(1.05)'}
                                         onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1)'}
                                     >
+                                        {/* Delete button */}
+                                        <button
+                                            onClick={(e) => {
+                                                e.stopPropagation(); // Prevent selecting the image
+                                                deleteImage(img.image_id);
+                                            }}
+                                            style={{
+                                                position: 'absolute',
+                                                top: '4px',
+                                                right: '4px',
+                                                background: 'rgba(239, 68, 68, 0.9)',
+                                                color: 'white',
+                                                border: 'none',
+                                                borderRadius: '50%',
+                                                width: '24px',
+                                                height: '24px',
+                                                cursor: 'pointer',
+                                                fontSize: '12px',
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                                zIndex: 1
+                                            }}
+                                            title="Delete image"
+                                        >×</button>
                                         <img
                                             src={`${backendUrl}/images/${userUuid}/${device.macAddress}/${img.image_id}/file`}
                                             alt={img.image_id}
@@ -459,16 +486,31 @@ export default function DeviceDashboard({ device, userUuid, backendUrl, refreshT
                                 }}>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
                                         <h4 style={{ margin: 0 }}>📷 {selectedImage.image_id}</h4>
-                                        <button
-                                            onClick={() => setSelectedImage(null)}
-                                            style={{
-                                                background: 'none',
-                                                border: 'none',
-                                                fontSize: '20px',
-                                                cursor: 'pointer',
-                                                color: '#666'
-                                            }}
-                                        >×</button>
+                                        <div style={{ display: 'flex', gap: '8px' }}>
+                                            <button
+                                                onClick={() => deleteImage(selectedImage.image_id)}
+                                                style={{
+                                                    background: 'var(--danger)',
+                                                    color: 'white',
+                                                    border: 'none',
+                                                    borderRadius: '4px',
+                                                    padding: '6px 12px',
+                                                    cursor: 'pointer',
+                                                    fontSize: '12px'
+                                                }}
+                                                title="Delete image"
+                                            >🗑️ Delete</button>
+                                            <button
+                                                onClick={() => setSelectedImage(null)}
+                                                style={{
+                                                    background: 'none',
+                                                    border: 'none',
+                                                    fontSize: '20px',
+                                                    cursor: 'pointer',
+                                                    color: '#666'
+                                                }}
+                                            >×</button>
+                                        </div>
                                     </div>
                                     <img
                                         src={`${backendUrl}/images/${userUuid}/${device.macAddress}/${selectedImage.image_id}/file`}

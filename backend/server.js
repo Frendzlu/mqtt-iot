@@ -694,13 +694,12 @@ app.post("/publish", (req, res) => {
 app.get("/telemetry/:userUuid/:macAddress", async (req, res) => {
     const { userUuid, macAddress } = req.params;
     const limit = parseInt(req.query.limit || "100");
-    const hours = parseInt(req.query.hours || "24");
+    const hours = req.query.hours ? parseInt(req.query.hours) : null;
+    const startDate = req.query.startDate;
+    const endDate = req.query.endDate;
     const sensorName = req.query.sensor;
 
-    // Validate hours is a number to prevent SQL injection
-    if (isNaN(hours) || hours < 0 || hours > 8760) {
-        return res.status(400).json({ error: "Invalid hours parameter" });
-    }
+    // Validate limit to prevent SQL injection
     if (isNaN(limit) || limit < 1 || limit > 10000) {
         return res.status(400).json({ error: "Invalid limit parameter" });
     }
@@ -708,18 +707,34 @@ app.get("/telemetry/:userUuid/:macAddress", async (req, res) => {
     try {
         let query = `SELECT id, device_mac_address, device_name, sensor_name, message, value, unit, timestamp 
              FROM telemetry 
-             WHERE user_uuid = $1 AND device_mac_address = $2 AND timestamp > NOW() - make_interval(hours => $3)`;
-        const params = [userUuid, macAddress, hours];
+             WHERE user_uuid = $1 AND device_mac_address = $2`;
+        const params = [userUuid, macAddress];
+
+        // Handle date filtering
+        if (startDate && endDate) {
+            // Custom date range
+            query += ` AND timestamp >= $3 AND timestamp <= $4`;
+            params.push(startDate, endDate);
+        } else if (hours !== null) {
+            // Hours-based range (existing behavior)
+            if (isNaN(hours) || hours < 0 || hours > 8760) {
+                return res.status(400).json({ error: "Invalid hours parameter" });
+            }
+            if (hours === 0) {
+                // All time - no date filter
+            } else {
+                query += ` AND timestamp > NOW() - make_interval(hours => $3)`;
+                params.push(hours);
+            }
+        }
 
         if (sensorName) {
-            query += ` AND sensor_name = $4`;
+            query += ` AND sensor_name = $${params.length + 1}`;
             params.push(sensorName);
-            query += ` ORDER BY timestamp DESC LIMIT $5`;
-            params.push(limit);
-        } else {
-            query += ` ORDER BY timestamp DESC LIMIT $4`;
-            params.push(limit);
         }
+        
+        query += ` ORDER BY timestamp DESC LIMIT $${params.length + 1}`;
+        params.push(limit);
 
         const result = await pool.query(query, params);
         res.json(result.rows);
@@ -912,6 +927,101 @@ app.get("/images/:userUuid/:macAddress/:imageId", async (req, res) => {
         });
     } catch (err) {
         console.error("[DB] Error fetching image:", err);
+        res.status(500).json({ error: "Database error" });
+    }
+});
+
+// Delete a specific image
+app.delete("/images/:userUuid/:macAddress/:imageId", async (req, res) => {
+    const { userUuid, macAddress, imageId } = req.params;
+    
+    console.log(`[DELETE] Attempting to delete image: userUuid=${userUuid}, macAddress=${macAddress}, imageId=${imageId}`);
+
+    // Convert MAC address format: underscores to colons and vice versa for fallback
+    const macWithColons = macAddress.replace(/_/g, ':');
+    const macWithUnderscores = macAddress.replace(/:/g, '_');
+    
+    console.log(`[DELETE] Trying MAC formats: ${macAddress}, ${macWithColons}, ${macWithUnderscores}`);
+
+    try {
+        // Try primary format first
+        let result = await pool.query(
+            `SELECT file_path FROM images 
+             WHERE user_uuid = $1 AND device_mac_address = $2 AND image_id = $3`,
+            [userUuid, macAddress, imageId]
+        );
+
+        // If not found, try with colons format
+        if (result.rows.length === 0 && macAddress !== macWithColons) {
+            console.log(`[DELETE] Primary format failed, trying with colons: ${macWithColons}`);
+            result = await pool.query(
+                `SELECT file_path FROM images 
+                 WHERE user_uuid = $1 AND device_mac_address = $2 AND image_id = $3`,
+                [userUuid, macWithColons, imageId]
+            );
+        }
+
+        // If still not found, try with underscores format
+        if (result.rows.length === 0 && macAddress !== macWithUnderscores) {
+            console.log(`[DELETE] Colons format failed, trying with underscores: ${macWithUnderscores}`);
+            result = await pool.query(
+                `SELECT file_path FROM images 
+                 WHERE user_uuid = $1 AND device_mac_address = $2 AND image_id = $3`,
+                [userUuid, macWithUnderscores, imageId]
+            );
+        }
+
+        console.log(`[DELETE] Query result: ${result.rows.length} rows found`);
+        
+        if (result.rows.length === 0) {
+            // Let's also try to find if the image exists with any MAC address format
+            const debugResult = await pool.query(
+                `SELECT device_mac_address, image_id FROM images 
+                 WHERE user_uuid = $1 AND image_id = $2`,
+                [userUuid, imageId]
+            );
+            console.log(`[DELETE] Debug: Found ${debugResult.rows.length} images with imageId ${imageId}:`, debugResult.rows);
+            return res.status(404).json({ error: "Image not found" });
+        }
+
+        const { file_path } = result.rows[0];
+        const actualMacAddress = result.rows.length > 0 ? 
+            (await pool.query(
+                `SELECT device_mac_address FROM images 
+                 WHERE user_uuid = $1 AND image_id = $2 AND file_path = $3 LIMIT 1`,
+                [userUuid, imageId, file_path]
+            )).rows[0].device_mac_address : macAddress;
+
+        // Delete from database using the actual MAC address format
+        await pool.query(
+            `DELETE FROM images 
+             WHERE user_uuid = $1 AND device_mac_address = $2 AND image_id = $3`,
+            [userUuid, actualMacAddress, imageId]
+        );
+
+        // Delete physical file if it exists
+        if (file_path) {
+            const filepath = path.join(IMAGES_DIR, file_path);
+            if (fs.existsSync(filepath)) {
+                try {
+                    fs.unlinkSync(filepath);
+                    console.log(`[IMAGE] Deleted file: ${file_path}`);
+                } catch (fileErr) {
+                    console.error(`[IMAGE] Failed to delete file ${file_path}:`, fileErr);
+                    // Don't fail the request if file deletion fails
+                }
+            }
+        }
+
+        // Broadcast deletion to frontend via Socket.IO
+        io.to(userUuid).emit("image-deleted", {
+            macAddress,
+            imageId
+        });
+
+        res.json({ status: "ok", message: "Image deleted successfully" });
+    } catch (err) {
+        console.error("[DB] Error deleting image:", err);
         res.status(500).json({ error: "Database error" });
     }
 });
