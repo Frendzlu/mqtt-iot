@@ -128,7 +128,7 @@ export default function App() {
         const savedUuid = localStorage.getItem("uuid");
         const savedUsername = localStorage.getItem("username");
         const savedPassword = localStorage.getItem("password");
-        
+
         if (savedUuid && savedUsername && savedPassword && !socket) {
             console.log('[SESSION] Restoring session for user:', savedUsername);
             fetchDevices(savedUuid);
@@ -151,67 +151,67 @@ export default function App() {
     return (
         <div className="app-container">
             <header className="app-header">
-                    <div className="header-left">
-                        <h1>MQTT IoT Dashboard</h1>
-                        <span className="user-badge">👤 {username}</span>
-                    </div>
-                    
-                    <div className="header-right">
-                        <button
-                            className={`btn-alarm ${unacknowledgedCount > 0 ? 'has-alarms' : ''}`}
-                            onClick={() => setShowAlarms(!showAlarms)}
-                        >
-                            🔔 Alarms {unacknowledgedCount > 0 && `(${unacknowledgedCount})`}
-                        </button>
-                        <button
-                            className="btn btn-secondary"
-                            onClick={logout}
-                            style={{ marginLeft: '12px', padding: '8px 16px', fontSize: '14px' }}
-                        >
-                            Logout
-                        </button>
-                    </div>
-                
-                </header>
+                <div className="header-left">
+                    <h1>MQTT IoT Dashboard</h1>
+                    <span className="user-badge">👤 {username}</span>
+                </div>
+
+                <div className="header-right">
+                    <button
+                        className={`btn-alarm ${unacknowledgedCount > 0 ? 'has-alarms' : ''}`}
+                        onClick={() => setShowAlarms(!showAlarms)}
+                    >
+                        🔔 Alarms {unacknowledgedCount > 0 && `(${unacknowledgedCount})`}
+                    </button>
+                    <button
+                        className="btn btn-secondary"
+                        onClick={logout}
+                        style={{ marginLeft: '12px', padding: '8px 16px', fontSize: '14px' }}
+                    >
+                        Logout
+                    </button>
+                </div>
+
+            </header>
             <div className="main-content">
                 <aside className="sidebar">
-                        <div className="sidebar-section">
-                            <h3>Devices</h3>
-                            <div className="device-list">
-                                {devices.map((device) => (
-                                    <button
-                                        key={device.macAddress}
-                                        className={`device-item ${selectedDevice?.macAddress === device.macAddress ? 'active' : ''}`}
-                                        onClick={() => setSelectedDevice(device)}
-                                    >
-                                        <span className="device-icon">📱</span>
-                                        <span className="device-name">{device.name}</span>
-                                    </button>
-                                ))}
-                                {devices.length === 0 && (
-                                    <p style={{ padding: '16px', textAlign: 'center', color: '#666' }}>
-                                        No devices yet. Devices auto-register via MQTT.
-                                    </p>
-                                )}
-                            </div>
+                    <div className="sidebar-section">
+                        <h3>Devices</h3>
+                        <div className="device-list">
+                            {devices.map((device) => (
+                                <button
+                                    key={device.macAddress}
+                                    className={`device-item ${selectedDevice?.macAddress === device.macAddress ? 'active' : ''}`}
+                                    onClick={() => setSelectedDevice(device)}
+                                >
+                                    <span className="device-icon">📱</span>
+                                    <span className="device-name">{device.name}</span>
+                                </button>
+                            ))}
+                            {devices.length === 0 && (
+                                <p style={{ padding: '16px', textAlign: 'center', color: '#666' }}>
+                                    No devices yet. Devices auto-register via MQTT.
+                                </p>
+                            )}
                         </div>
+                    </div>
 
-                        <div className="sidebar-section mqtt-info">
-                            <h4>MQTT Credentials</h4>
-                            <div className="info-item">
-                                <span className="label">Username:</span>
-                                <code>{uuid}</code>
-                            </div>
-                            <div className="info-item">
-                                <span className="label">Password:</span>
-                                <code>{password || "(your password)"}</code>
-                            </div>
-                            <div className="info-item">
-                                <span className="label">Broker:</span>
-                                <code>localhost:1883</code>
-                            </div>
+                    <div className="sidebar-section mqtt-info">
+                        <h4>MQTT Credentials</h4>
+                        <div className="info-item">
+                            <span className="label">Username:</span>
+                            <code>{uuid}</code>
                         </div>
-                    </aside>
+                        <div className="info-item">
+                            <span className="label">Password:</span>
+                            <code>{password || "(your password)"}</code>
+                        </div>
+                        <div className="info-item">
+                            <span className="label">Broker:</span>
+                            <code>localhost:1883</code>
+                        </div>
+                    </div>
+                </aside>
 
                 <main className="content-area">
                     {showAlarms ? (

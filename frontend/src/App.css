@@ -20,7 +20,8 @@
   box-sizing: border-box;
 }
 
-html, body {
+html,
+body {
   margin: 0;
   padding: 0;
   width: 100%;
@@ -274,7 +275,8 @@ body {
   flex: 1;
   overflow-y: auto;
   padding: 16px;
-  min-width: 0; /* Allow flex shrinking */
+  min-width: 0;
+  /* Allow flex shrinking */
   position: static;
   display: block;
 }
@@ -654,11 +656,30 @@ body {
   gap: 4px;
 }
 
-.btn-command.primary { background: var(--primary); color: white; }
-.btn-command.secondary { background: var(--border); color: var(--text); }
-.btn-command.success { background: var(--secondary); color: white; }
-.btn-command.warning { background: var(--warning); color: white; }
-.btn-command.danger { background: var(--danger); color: white; }
+.btn-command.primary {
+  background: var(--primary);
+  color: white;
+}
+
+.btn-command.secondary {
+  background: var(--border);
+  color: var(--text);
+}
+
+.btn-command.success {
+  background: var(--secondary);
+  color: white;
+}
+
+.btn-command.warning {
+  background: var(--warning);
+  color: white;
+}
+
+.btn-command.danger {
+  background: var(--danger);
+  color: white;
+}
 
 .btn-command:hover {
   transform: translateY(-1px);

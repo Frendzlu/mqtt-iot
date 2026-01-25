@@ -95,7 +95,7 @@ mqttClient.on("message", async (topic, message) => {
 
     // Parse topic: /{uuid}/devices/{deviceId}/{type} or /{uuid}/devices for self-registration
     const parts = topic.split("/");
-    
+
     // Handle device self-registration: /{uuid}/devices
     if (parts.length === 3 && parts[2] === "devices") {
         const userUuid = parts[1];
@@ -115,7 +115,7 @@ mqttClient.on("message", async (topic, message) => {
 
         const deviceName = registrationData.name || `Device-${macAddress}`;
         const macAddress = registrationData.macAddress;
-        
+
         if (!macAddress) {
             console.warn(`[DEVICE-REGISTER] MAC address required in message: ${msg}`);
             return;
@@ -127,7 +127,7 @@ mqttClient.on("message", async (topic, message) => {
         // Check if device with this MAC address exists for ANY user (case-insensitive)
         let existingDevice = null;
         let existingUser = null;
-        
+
         for (const [userUuid, userData] of users) {
             const device = userData.devices.find(d => d.macAddress.toUpperCase() === deviceMacAddress);
             if (device) {
@@ -141,18 +141,18 @@ mqttClient.on("message", async (topic, message) => {
             // Device exists for another user - reassign it
             // Historical data stays with the old user, new data goes to new user
             console.log(`[DEVICE-REGISTER] Reassigning device ${deviceMacAddress} from user ${existingUser.username} to ${user.username}`);
-            
+
             try {
                 // Update device ownership in database (but leave historical data with old user)
                 await pool.query('UPDATE devices SET user_uuid = $1, name = $2 WHERE UPPER(mac_address) = UPPER($3)', [userUuid, deviceName, deviceMacAddress]);
-                
+
                 // Update in-memory data
                 existingUser.devices = existingUser.devices.filter(d => d.macAddress !== deviceMacAddress);
                 const reassignedDevice = { macAddress: deviceMacAddress, name: deviceName };
                 user.devices.push(reassignedDevice);
-                
+
                 console.log(`[DEVICE-REGISTER] Reassigned device: ${deviceName} (${deviceMacAddress}) to user ${user.username}. Historical data remains with ${existingUser.username}`);
-                
+
                 // Send response back to device
                 const responseTopic = `/${userUuid}/devices/register-response`;
                 const responseMessage = JSON.stringify({
@@ -162,14 +162,14 @@ mqttClient.on("message", async (topic, message) => {
                     timestamp: new Date().toISOString()
                 });
                 mqttClient.publish(responseTopic, responseMessage);
-                
+
                 // Broadcast device creation to frontend via Socket.IO
                 io.to(userUuid).emit("device-registered", {
                     macAddress: deviceMacAddress,
                     deviceName: deviceName,
                     timestamp: new Date().toISOString()
                 });
-                
+
                 return;
             } catch (err) {
                 console.error('[DEVICE-REGISTER] Database error during reassignment:', err);
@@ -192,7 +192,7 @@ mqttClient.on("message", async (topic, message) => {
                     await pool.query('UPDATE devices SET name = $1 WHERE UPPER(mac_address) = UPPER($2)', [deviceName, deviceMacAddress]);
                     existingDevice.name = deviceName;
                     console.log(`[DEVICE-REGISTER] Updated device name: ${deviceName} (${deviceMacAddress})`);
-                    
+
                     // Send response back to device
                     const responseTopic = `/${userUuid}/devices/register-response`;
                     const responseMessage = JSON.stringify({
@@ -217,7 +217,7 @@ mqttClient.on("message", async (topic, message) => {
             } else {
                 // Both user and name match - do nothing
                 console.log(`[DEVICE-REGISTER] Device ${deviceName} (${deviceMacAddress}) already exists for user ${user.username} with same name - no changes needed`);
-                
+
                 // Send response back to device
                 const responseTopic = `/${userUuid}/devices/register-response`;
                 const responseMessage = JSON.stringify({
@@ -235,20 +235,20 @@ mqttClient.on("message", async (topic, message) => {
         try {
             // Double-check in database using case-insensitive search
             const existingInDB = await pool.query('SELECT mac_address, user_uuid, name FROM devices WHERE UPPER(mac_address) = UPPER($1)', [deviceMacAddress]);
-            
+
             if (existingInDB.rows.length > 0) {
                 const dbDevice = existingInDB.rows[0];
                 console.log(`[DEVICE-REGISTER] Device ${deviceMacAddress} found in database but not in memory - syncing...`);
-                
+
                 if (dbDevice.user_uuid === userUuid) {
                     // Device belongs to current user - just sync to memory
                     const syncedDevice = { macAddress: deviceMacAddress, name: dbDevice.name };
                     if (!user.devices.find(d => d.macAddress.toUpperCase() === deviceMacAddress)) {
                         user.devices.push(syncedDevice);
                     }
-                    
+
                     console.log(`[DEVICE-REGISTER] Synced existing device: ${dbDevice.name} (${deviceMacAddress}) for user ${user.username}`);
-                    
+
                     // Send response back to device
                     const responseTopic = `/${userUuid}/devices/register-response`;
                     const responseMessage = JSON.stringify({
@@ -262,20 +262,20 @@ mqttClient.on("message", async (topic, message) => {
                 } else {
                     // Device belongs to different user - reassign
                     await pool.query('UPDATE devices SET user_uuid = $1, name = $2 WHERE UPPER(mac_address) = UPPER($3)', [userUuid, deviceName, deviceMacAddress]);
-                    
+
                     // Update in-memory data
                     const reassignedDevice = { macAddress: deviceMacAddress, name: deviceName };
                     user.devices.push(reassignedDevice);
-                    
+
                     // Remove from old user's memory if they exist
                     for (const [otherUserUuid, otherUserData] of users) {
                         if (otherUserUuid !== userUuid) {
                             otherUserData.devices = otherUserData.devices.filter(d => d.macAddress.toUpperCase() !== deviceMacAddress);
                         }
                     }
-                    
+
                     console.log(`[DEVICE-REGISTER] Reassigned device from database: ${deviceName} (${deviceMacAddress}) to user ${user.username}`);
-                    
+
                     // Send response back to device
                     const responseTopic = `/${userUuid}/devices/register-response`;
                     const responseMessage = JSON.stringify({
@@ -285,7 +285,7 @@ mqttClient.on("message", async (topic, message) => {
                         timestamp: new Date().toISOString()
                     });
                     mqttClient.publish(responseTopic, responseMessage);
-                    
+
                     // Broadcast device creation to frontend via Socket.IO
                     io.to(userUuid).emit("device-registered", {
                         macAddress: deviceMacAddress,
@@ -295,7 +295,7 @@ mqttClient.on("message", async (topic, message) => {
                     return;
                 }
             }
-            
+
             // Device truly doesn't exist - create it
             const newDevice = { macAddress: deviceMacAddress, name: deviceName };
 
@@ -304,7 +304,7 @@ mqttClient.on("message", async (topic, message) => {
                 'INSERT INTO devices (mac_address, user_uuid, name) VALUES ($1, $2, $3)',
                 [deviceMacAddress, userUuid, deviceName]
             );
-            
+
             // Add to in-memory user
             user.devices.push(newDevice);
             console.log(`[DEVICE-REGISTER] Created new device: ${deviceName} (${deviceMacAddress}) for user ${user.username}`);
@@ -325,7 +325,7 @@ mqttClient.on("message", async (topic, message) => {
                 deviceName: deviceName,
                 timestamp: new Date().toISOString()
             });
-            
+
         } catch (err) {
             console.error('[DEVICE-REGISTER] Database error:', err);
             const responseTopic = `/${userUuid}/devices/register-response`;
@@ -718,12 +718,12 @@ app.post("/add-device", async (req, res) => {
 
     // Convert MAC address format (replace : with _ and normalize to uppercase)
     const deviceMacAddress = macAddress.replace(/:/g, '_').toUpperCase();
-    
+
     try {
         // Check if device already exists (case-insensitive) - first in memory
         let existingDevice = null;
         let existingUser = null;
-        
+
         for (const [uuid, userData] of users) {
             const device = userData.devices.find(d => d.macAddress.toUpperCase() === deviceMacAddress);
             if (device) {
@@ -732,7 +732,7 @@ app.post("/add-device", async (req, res) => {
                 break;
             }
         }
-        
+
         if (existingDevice) {
             if (existingUser.uuid === userUuid) {
                 return res.status(409).json({ error: "Device already exists for this user" });
@@ -740,10 +740,10 @@ app.post("/add-device", async (req, res) => {
                 return res.status(409).json({ error: "Device already exists for another user" });
             }
         }
-        
+
         // Double-check in database using case-insensitive search
         const existingInDB = await pool.query('SELECT mac_address, user_uuid, name FROM devices WHERE UPPER(mac_address) = UPPER($1)', [deviceMacAddress]);
-        
+
         if (existingInDB.rows.length > 0) {
             const dbDevice = existingInDB.rows[0];
             if (dbDevice.user_uuid === userUuid) {
@@ -757,7 +757,7 @@ app.post("/add-device", async (req, res) => {
                 return res.status(409).json({ error: "Device already exists for another user" });
             }
         }
-    
+
         const device = { macAddress: deviceMacAddress, name: deviceName };
 
         // Save to database
@@ -836,7 +836,7 @@ app.get("/telemetry/:userUuid/:macAddress", async (req, res) => {
             query += ` AND sensor_name = $${params.length + 1}`;
             params.push(sensorName);
         }
-        
+
         query += ` ORDER BY timestamp DESC LIMIT $${params.length + 1}`;
         params.push(limit);
 
@@ -1045,13 +1045,13 @@ app.get("/images/:userUuid/:macAddress/:imageId", async (req, res) => {
 // Delete a specific image
 app.delete("/images/:userUuid/:macAddress/:imageId", async (req, res) => {
     const { userUuid, macAddress, imageId } = req.params;
-    
+
     console.log(`[DELETE] Attempting to delete image: userUuid=${userUuid}, macAddress=${macAddress}, imageId=${imageId}`);
 
     // Convert MAC address format: underscores to colons and vice versa for fallback
     const macWithColons = macAddress.replace(/_/g, ':');
     const macWithUnderscores = macAddress.replace(/:/g, '_');
-    
+
     console.log(`[DELETE] Trying MAC formats: ${macAddress}, ${macWithColons}, ${macWithUnderscores}`);
 
     try {
@@ -1083,7 +1083,7 @@ app.delete("/images/:userUuid/:macAddress/:imageId", async (req, res) => {
         }
 
         console.log(`[DELETE] Query result: ${result.rows.length} rows found`);
-        
+
         if (result.rows.length === 0) {
             // Let's also try to find if the image exists with any MAC address format
             const debugResult = await pool.query(
@@ -1096,7 +1096,7 @@ app.delete("/images/:userUuid/:macAddress/:imageId", async (req, res) => {
         }
 
         const { file_path } = result.rows[0];
-        const actualMacAddress = result.rows.length > 0 ? 
+        const actualMacAddress = result.rows.length > 0 ?
             (await pool.query(
                 `SELECT device_mac_address FROM images 
                  WHERE user_uuid = $1 AND image_id = $2 AND file_path = $3 LIMIT 1`,

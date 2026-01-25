@@ -73,7 +73,7 @@ export const useApi = (backendUrl: string) => {
 
     const register = async (username: string, password: string) => {
         if (!username || !password) throw new Error("username and password required");
-        
+
         try {
             const res = await fetch(`${backendUrl}/register`, {
                 method: "POST",
@@ -92,7 +92,7 @@ export const useApi = (backendUrl: string) => {
 
     const login = async (username: string, password: string) => {
         if (!username || !password) throw new Error("username and password required");
-        
+
         try {
             const res = await fetch(`${backendUrl}/login`, {
                 method: "POST",
