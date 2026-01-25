@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
-import { io, Socket } from "socket.io-client";
+import io from "socket.io-client";
+import type { Socket } from "socket.io-client";
 import DeviceDashboard from "./components/DeviceDashboard";
 import AlarmsPanel from "./components/AlarmsPanel";
 import LoginForm from "./components/LoginForm";
@@ -12,9 +13,9 @@ export default function App() {
         return localStorage.getItem("backendUrl") || "http://localhost:3001";
     });
     const api = useApi(backendUrl);
-    const [username, setUsername] = useState("");
-    const [uuid, setUuid] = useState("");
-    const [password, setPassword] = useState("");
+    const [username, setUsername] = useState(() => localStorage.getItem("username") || "");
+    const [uuid, setUuid] = useState(() => localStorage.getItem("uuid") || "");
+    const [password, setPassword] = useState(() => localStorage.getItem("password") || "");
     const [devices, setDevices] = useState<Device[]>([]);
     const [alarms, setAlarms] = useState<Alarm[]>([]);
     const [unacknowledgedCount, setUnacknowledgedCount] = useState(0);
@@ -28,6 +29,10 @@ export default function App() {
         setUsername(data.username);
         setPassword(data.password);
         setBackendUrl(localStorage.getItem("backendUrl") || "http://localhost:3001");
+        // Save session to localStorage
+        localStorage.setItem("uuid", data.uuid);
+        localStorage.setItem("username", data.username);
+        localStorage.setItem("password", data.password);
         fetchDevices(data.uuid);
         fetchAlarms(data.uuid);
         startTelemetry(data.uuid);
@@ -42,6 +47,10 @@ export default function App() {
         setAlarms([]);
         setSelectedDevice(null);
         setUnacknowledgedCount(0);
+        // Clear session from localStorage
+        localStorage.removeItem("uuid");
+        localStorage.removeItem("username");
+        localStorage.removeItem("password");
         if (socket) {
             socket.disconnect();
             setSocket(null);
@@ -113,6 +122,20 @@ export default function App() {
             console.log("Socket.IO disconnected");
         });
     };
+
+    // Restore session on mount
+    useEffect(() => {
+        const savedUuid = localStorage.getItem("uuid");
+        const savedUsername = localStorage.getItem("username");
+        const savedPassword = localStorage.getItem("password");
+        
+        if (savedUuid && savedUsername && savedPassword && !socket) {
+            console.log('[SESSION] Restoring session for user:', savedUsername);
+            fetchDevices(savedUuid);
+            fetchAlarms(savedUuid);
+            startTelemetry(savedUuid);
+        }
+    }, []);
 
     // Cleanup socket on unmount
     useEffect(() => {

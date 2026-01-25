@@ -57,6 +57,10 @@ export const useApi = (backendUrl: string) => {
 
     const acknowledgeAlarm = async (alarmId: number): Promise<boolean> => {
         try {
+            if (!alarmId || alarmId === undefined || typeof alarmId !== 'number') {
+                console.error("Invalid alarmId passed to acknowledgeAlarm:", alarmId);
+                return false;
+            }
             const res = await fetch(`${backendUrl}/alarms/${alarmId}/acknowledge`, {
                 method: "POST",
             });

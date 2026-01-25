@@ -932,10 +932,17 @@ app.get("/alarms/:userUuid", async (req, res) => {
 app.post("/alarms/:alarmId/acknowledge", async (req, res) => {
     const { alarmId } = req.params;
 
+    // Validate alarmId
+    const id = parseInt(alarmId);
+    if (isNaN(id) || !alarmId || alarmId === 'undefined') {
+        console.error(`[API] Invalid alarmId received: "${alarmId}"`);
+        return res.status(400).json({ error: "Invalid alarm ID" });
+    }
+
     try {
         await pool.query(
             `UPDATE alarms SET acknowledged = true, acknowledged_at = NOW() WHERE id = $1`,
-            [alarmId]
+            [id]
         );
         res.json({ status: "ok" });
     } catch (err) {

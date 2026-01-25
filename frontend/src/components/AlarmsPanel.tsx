@@ -75,7 +75,11 @@ export default function AlarmsPanel({ alarms, onAcknowledge, onClose }: Props) {
                                         {new Date(alarm.timestamp).toLocaleString()}
                                     </span>
                                     <button
-                                        onClick={() => onAcknowledge(alarm.id)}
+                                        onClick={() => {
+                                            console.log('Acknowledging alarm:', alarm);
+                                            console.log('Alarm ID:', alarm.id);
+                                            onAcknowledge(alarm.id);
+                                        }}
                                         className="btn btn-sm btn-ack"
                                     >
                                         ✓ Acknowledge

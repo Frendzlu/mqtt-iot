@@ -426,13 +426,31 @@ body {
 }
 
 .custom-date-range input {
-  padding: 4px 8px;
+  padding: 6px 10px;
   border: 1px solid var(--border);
   border-radius: 4px;
   font-size: 13px;
   width: auto;
-  min-width: 140px;
-  max-width: 200px;
+  min-width: 180px;
+  max-width: 220px;
+  background-color: #ffffff;
+  color: #1f2937;
+  font-family: inherit;
+}
+
+.custom-date-range input[type="datetime-local"] {
+  color-scheme: light;
+}
+
+.custom-date-range input[type="datetime-local"]::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  filter: invert(0);
+}
+
+.custom-date-range input:focus {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+  border-color: var(--primary);
 }
 
 .header-controls {
