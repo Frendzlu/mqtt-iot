@@ -648,7 +648,7 @@ app.post("/register", async (req, res) => {
             try { acl = fs.readFileSync(aclPath, "utf8"); } catch (e) { acl = ""; }
             const userMarker = `user ${uuid} `;
             if (!acl.includes(userMarker)) {
-                const entry = `\n# user created by backend: ${username} \nuser ${uuid} \ntopic readwrite / ${uuid}/#\n`;
+                const entry = `\n# user created by backend: ${username} \nuser ${uuid} \ntopic readwrite /${uuid}/#\n`;
                 fs.appendFileSync(aclPath, entry);
             }
 
