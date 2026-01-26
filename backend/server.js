@@ -424,11 +424,13 @@ mqttClient.on("message", async (topic, message) => {
                 timestamp: new Date().toISOString(),
             };
 
-            // Broadcast alarm to frontend via Socket.IO
-            io.to(userUuid).emit("alarm", alarm);
-
-            // Store alarm in database
-            storeAlarm(alarm).catch((err) => console.error("[DB] Failed to store alarm:", err));
+            // Store alarm in database first to get the ID
+            storeAlarm(alarm)
+                .then((storedAlarm) => {
+                    // Broadcast alarm to frontend via Socket.IO with the database ID
+                    io.to(userUuid).emit("alarm", storedAlarm);
+                })
+                .catch((err) => console.error("[DB] Failed to store alarm:", err));
         }
 
         // Handle image messages
@@ -521,13 +523,15 @@ async function storeTelemetry(userUuid, deviceMacAddress, deviceName, message) {
     }
 }
 
-// Store alarm in database
+// Store alarm and return the complete record with ID
 async function storeAlarm(alarm) {
-    await pool.query(
+    const result = await pool.query(
         `INSERT INTO alarms (user_uuid, device_mac_address, device_name, severity, message, timestamp) 
-         VALUES ($1, $2, $3, $4, $5, NOW())`,
+         VALUES ($1, $2, $3, $4, $5, NOW())
+         RETURNING id, user_uuid, device_mac_address, device_name, severity, message, acknowledged, acknowledged_at, timestamp`,
         [alarm.userUuid, alarm.macAddress, alarm.deviceName, alarm.severity, alarm.message]
     );
+    return result.rows[0];
 }
 
 // Handle image messages
@@ -562,7 +566,7 @@ async function handleImageMessage(userUuid, deviceMacAddress, deviceName, messag
         // Generate unique filename
         const timestamp = Date.now();
         const extension = metadata.format || 'png';
-        const filename = `${userUuid}_${deviceMacAddress}_${imageId}_${timestamp}.${extension}`;
+        const filename = `${userUuid}_${deviceMacAddress}_${imageId}_${timestamp}.${extension} `;
         const filepath = path.join(IMAGES_DIR, filename);
 
         // Decode base64 and save to file
@@ -574,8 +578,8 @@ async function handleImageMessage(userUuid, deviceMacAddress, deviceName, messag
 
         // Store only metadata and file path in database
         await pool.query(
-            `INSERT INTO images (user_uuid, device_mac_address, device_name, image_id, file_path, file_size, metadata, timestamp, message_id) 
-             VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8)`,
+            `INSERT INTO images(user_uuid, device_mac_address, device_name, image_id, file_path, file_size, metadata, timestamp, message_id)
+VALUES($1, $2, $3, $4, $5, $6, $7, NOW(), $8)`,
             [userUuid, deviceMacAddress, deviceName, imageId, filename, fileSize, JSON.stringify(metadata), messageId]
         );
 
@@ -631,7 +635,7 @@ app.post("/register", async (req, res) => {
     const passwdPath = process.env.MOSQUITTO_PASSWD || "/mosquitto/config/passwd";
     const aclPath = process.env.MOSQUITTO_ACL || "/mosquitto/config/acl";
 
-    exec(`mosquitto_passwd -b ${passwdPath} ${uuid} ${escapeShellArg(password)}`, (err, stdout, stderr) => {
+    exec(`mosquitto_passwd - b ${passwdPath} ${uuid} ${escapeShellArg(password)} `, (err, stdout, stderr) => {
         if (err) {
             console.error("mosquitto_passwd error:", err, stderr);
             // still return success for backend user creation, but notify client
@@ -642,9 +646,9 @@ app.post("/register", async (req, res) => {
             // Append ACL entry for this user if not present
             let acl = "";
             try { acl = fs.readFileSync(aclPath, "utf8"); } catch (e) { acl = ""; }
-            const userMarker = `user ${uuid}`;
+            const userMarker = `user ${uuid} `;
             if (!acl.includes(userMarker)) {
-                const entry = `\n# user created by backend: ${username}\nuser ${uuid}\ntopic readwrite /${uuid}/#\n`;
+                const entry = `\n# user created by backend: ${username} \nuser ${uuid} \ntopic readwrite / ${uuid}/#\n`;
                 fs.appendFileSync(aclPath, entry);
             }
 

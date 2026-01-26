@@ -46,8 +46,10 @@ export default function DeviceDashboard({ device, userUuid, backendUrl, refreshT
 
     const fetchTelemetry = async () => {
         try {
-            let url = `${backendUrl}/telemetry/${userUuid}/${device.macAddress}?limit=200`;
-            
+            // Use higher limit when fetching all sensors to ensure enough data per sensor
+            const limit = selectedSensor ? 1000 : 3000;
+            let url = `${backendUrl}/telemetry/${userUuid}/${device.macAddress}?limit=${limit}`;
+
             if (isCustomRange && customRange.start && customRange.end) {
                 // Custom date range
                 url += `&startDate=${encodeURIComponent(customRange.start)}&endDate=${encodeURIComponent(customRange.end)}`;
@@ -55,11 +57,11 @@ export default function DeviceDashboard({ device, userUuid, backendUrl, refreshT
                 // Hours-based range (0 = all time)
                 url += `&hours=${timeRange}`;
             }
-            
+
             if (selectedSensor) {
                 url += `&sensor=${encodeURIComponent(selectedSensor)}`;
             }
-            
+
             const res = await fetch(url);
             const data = await res.json();
             console.log(`[TELEMETRY] Fetched ${data.length} records:`, data.slice(0, 3));
@@ -137,7 +139,7 @@ export default function DeviceDashboard({ device, userUuid, backendUrl, refreshT
                     .filter((t) => t.value !== null && t.sensor_name === selectedSensor)
                     .map((t) => ({
                         timestamp: new Date(t.timestamp).toLocaleTimeString(),
-                        value: t.value,
+                        value: Number(t.value),
                         unit: t.unit,
                         fullTime: new Date(t.timestamp).toLocaleString(),
                     }))
@@ -159,7 +161,7 @@ export default function DeviceDashboard({ device, userUuid, backendUrl, refreshT
             Object.entries(grouped).forEach(([sensorName, data]) => {
                 chartDataBySensor[sensorName] = data.map((t) => ({
                     timestamp: new Date(t.timestamp).toLocaleTimeString(),
-                    value: t.value,
+                    value: Number(t.value),
                     unit: t.unit,
                     fullTime: new Date(t.timestamp).toLocaleString(),
                 }));
@@ -193,6 +195,8 @@ export default function DeviceDashboard({ device, userUuid, backendUrl, refreshT
     };
 
     const latestValues = getLatestValues();
+    // Sort sensor names alphabetically to prevent jumping when new data arrives
+    const sortedLatestValues = Object.entries(latestValues).sort(([a], [b]) => a.localeCompare(b));
 
     return (
         <div className="device-dashboard">
@@ -220,8 +224,8 @@ export default function DeviceDashboard({ device, userUuid, backendUrl, refreshT
                     )}
                     <div className="time-range-selector">
                         <label>Time Range: </label>
-                        <select 
-                            value={isCustomRange ? "custom" : timeRange.toString()} 
+                        <select
+                            value={isCustomRange ? "custom" : timeRange.toString()}
                             onChange={(e) => {
                                 if (e.target.value === "custom") {
                                     setIsCustomRange(true);
@@ -238,7 +242,7 @@ export default function DeviceDashboard({ device, userUuid, backendUrl, refreshT
                             <option value={0}>All Time</option>
                             <option value="custom">Custom Range</option>
                         </select>
-                        
+
                         {isCustomRange && (
                             <div className="custom-date-range">
                                 <input
@@ -263,7 +267,7 @@ export default function DeviceDashboard({ device, userUuid, backendUrl, refreshT
 
             <div className="dashboard-grid">
                 {/* Latest Value Cards */}
-                {Object.entries(latestValues).map(([sensorName, latestValue]) => (
+                {sortedLatestValues.map(([sensorName, latestValue]) => (
                     <div key={`latest-${sensorName}`} className="card latest-value-card">
                         <h3>Latest Reading: {sensorName}</h3>
                         <div className="value-display">
@@ -306,26 +310,43 @@ export default function DeviceDashboard({ device, userUuid, backendUrl, refreshT
                                     <span className="stat-label">Sensors Active</span>
                                     <span className="stat-value">{Object.keys(chartDataBySensor).length}</span>
                                 </div>
-                                {selectedSensor && chartDataBySensor[selectedSensor] && (
+                                {selectedSensor && chartDataBySensor[selectedSensor] && chartDataBySensor[selectedSensor].length > 0 && (
                                     <>
                                         <div className="stat-item">
                                             <span className="stat-label">Average</span>
                                             <span className="stat-value">
-                                                {(
-                                                    chartDataBySensor[selectedSensor].reduce((sum, d) => sum + (d.value || 0), 0) / chartDataBySensor[selectedSensor].length
-                                                ).toFixed(2)}
+                                                {(() => {
+                                                    const values = chartDataBySensor[selectedSensor]
+                                                        .map(d => Number(d.value))
+                                                        .filter(v => !isNaN(v) && isFinite(v));
+                                                    if (values.length === 0) return 'N/A';
+                                                    const avg = values.reduce((sum, v) => sum + v, 0) / values.length;
+                                                    return avg.toFixed(2);
+                                                })()}
                                             </span>
                                         </div>
                                         <div className="stat-item">
                                             <span className="stat-label">Min</span>
                                             <span className="stat-value">
-                                                {Math.min(...chartDataBySensor[selectedSensor].map((d) => d.value || 0)).toFixed(2)}
+                                                {(() => {
+                                                    const values = chartDataBySensor[selectedSensor]
+                                                        .map(d => Number(d.value))
+                                                        .filter(v => !isNaN(v) && isFinite(v));
+                                                    if (values.length === 0) return 'N/A';
+                                                    return Math.min(...values).toFixed(2);
+                                                })()}
                                             </span>
                                         </div>
                                         <div className="stat-item">
                                             <span className="stat-label">Max</span>
                                             <span className="stat-value">
-                                                {Math.max(...chartDataBySensor[selectedSensor].map((d) => d.value || 0)).toFixed(2)}
+                                                {(() => {
+                                                    const values = chartDataBySensor[selectedSensor]
+                                                        .map(d => Number(d.value))
+                                                        .filter(v => !isNaN(v) && isFinite(v));
+                                                    if (values.length === 0) return 'N/A';
+                                                    return Math.max(...values).toFixed(2);
+                                                })()}
                                             </span>
                                         </div>
                                     </>
@@ -336,47 +357,72 @@ export default function DeviceDashboard({ device, userUuid, backendUrl, refreshT
                 </div>
 
                 {/* Chart Cards - One per sensor when "all" selected, or single chart for selected sensor */}
-                {Object.entries(chartDataBySensor).map(([sensorName, chartData]) =>
-                    chartData.length > 0 && (
-                        <div key={`chart-${sensorName}`} className="card chart-card">
-                            <h3>📈 {sensorName} Time Series</h3>
-                            <ResponsiveContainer width="100%" height={300}>
-                                <LineChart data={chartData}>
-                                    <CartesianGrid strokeDasharray="3 3" stroke="#e0e0e0" />
-                                    <XAxis
-                                        dataKey="timestamp"
-                                        tick={{ fontSize: 12 }}
-                                        angle={-45}
-                                        textAnchor="end"
-                                        height={80}
-                                    />
-                                    <YAxis tick={{ fontSize: 12 }} />
-                                    <Tooltip
-                                        contentStyle={{
-                                            backgroundColor: "#fff",
-                                            border: "1px solid #ccc",
-                                            borderRadius: "8px",
-                                        }}
-                                        formatter={(value: any) => [
-                                            `${value}${chartData[0]?.unit || ""}`,
-                                            sensorName,
-                                        ]}
-                                    />
-                                    <Legend />
-                                    <Line
-                                        type={chartData[0]?.unit === 'bin' ? "stepAfter" : "monotone"}
-                                        dataKey="value"
-                                        stroke="#4f46e5"
-                                        strokeWidth={2}
-                                        dot={{ fill: "#4f46e5", r: 3 }}
-                                        activeDot={{ r: 6 }}
-                                        name={sensorName}
-                                    />
-                                </LineChart>
-                            </ResponsiveContainer>
-                        </div>
-                    )
-                )}
+                {Object.entries(chartDataBySensor)
+                    .sort(([a], [b]) => a.localeCompare(b))
+                    .map(([sensorName, chartData]) =>
+                        chartData.length > 0 && (
+                            <div key={`chart-${sensorName}`} className="card chart-card">
+                                <h3>{sensorName} Time Series</h3>
+                                <ResponsiveContainer width="100%" height={300}>
+                                    <LineChart data={chartData}>
+                                        <CartesianGrid strokeDasharray="3 3" stroke="#e0e0e0" />
+                                        <XAxis
+                                            dataKey="timestamp"
+                                            tick={{ fontSize: 12 }}
+                                            angle={-45}
+                                            textAnchor="end"
+                                            height={80}
+                                        />
+                                        <YAxis
+                                            tick={{ fontSize: 12 }}
+                                            domain={[
+                                                (dataMin: number) => {
+                                                    // Round down to nearest sensible value with padding
+                                                    const padding = (dataMin) * 0.05; // 5% padding
+                                                    const minWithPadding = dataMin - Math.abs(padding);
+                                                    // Find order of magnitude
+                                                    const magnitude = Math.pow(10, Math.floor(Math.log10(Math.abs(minWithPadding))));
+                                                    const roundTo = magnitude >= 100 ? 50 : magnitude >= 10 ? 10 : magnitude >= 1 ? 1 : 0.1;
+                                                    return Math.floor(minWithPadding / roundTo) * roundTo;
+                                                },
+                                                (dataMax: number) => {
+                                                    // Round up to nearest sensible value with padding
+                                                    const padding = (dataMax) * 0.05; // 5% padding
+                                                    const maxWithPadding = dataMax + Math.abs(padding);
+                                                    // Find order of magnitude
+                                                    const magnitude = Math.pow(10, Math.floor(Math.log10(Math.abs(maxWithPadding))));
+                                                    const roundTo = magnitude >= 100 ? 50 : magnitude >= 10 ? 10 : magnitude >= 1 ? 1 : 0.1;
+                                                    return Math.ceil(maxWithPadding / roundTo) * roundTo;
+                                                }
+                                            ]}
+                                            scale="linear"
+                                        />
+                                        <Tooltip
+                                            contentStyle={{
+                                                backgroundColor: "#fff",
+                                                border: "1px solid #ccc",
+                                                borderRadius: "8px",
+                                            }}
+                                            formatter={(value: any) => [
+                                                `${value}${chartData[0]?.unit || ""}`,
+                                                sensorName,
+                                            ]}
+                                        />
+                                        <Legend />
+                                        <Line
+                                            type={chartData[0]?.unit === 'bin' ? "stepAfter" : "monotone"}
+                                            dataKey="value"
+                                            stroke="#4f46e5"
+                                            strokeWidth={2}
+                                            dot={{ fill: "#4f46e5", r: 3 }}
+                                            activeDot={{ r: 6 }}
+                                            name={sensorName}
+                                        />
+                                    </LineChart>
+                                </ResponsiveContainer>
+                            </div>
+                        )
+                    )}
 
                 {/* Command Card */}
                 <div className="card command-card">
@@ -543,6 +589,6 @@ export default function DeviceDashboard({ device, userUuid, backendUrl, refreshT
                     )}
                 </div>
             </div>
-        </div>
+        </div >
     );
 }

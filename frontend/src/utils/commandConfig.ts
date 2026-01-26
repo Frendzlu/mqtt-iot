@@ -19,85 +19,31 @@ export type CommandConfig = {
 
 export const COMMAND_CONFIGS: CommandConfig[] = [
     {
-        id: 'status',
-        label: 'STATUS',
-        description: 'Get device status',
-        template: 'STATUS',
+        id: 'photo',
+        label: 'Make a photo',
+        description: 'Take a photo with the device camera',
+        template: '{"command":"photo"}',
         color: 'primary'
     },
     {
-        id: 'reset',
-        label: 'RESET',
-        description: 'Reset device',
-        template: 'RESET',
-        color: 'warning'
+        id: 'temp',
+        label: 'Make a temperature measurement',
+        description: 'Take a temperature reading',
+        template: '{"command":"temp"}',
+        color: 'primary'
     },
     {
-        id: 'led_control',
-        label: 'LED Control',
-        description: 'Control LED state',
-        template: '{"led":"{{state}}"}',
+        id: 'set_frequency',
+        label: 'Set frequency',
+        description: 'Set telemetry frequency in minutes',
+        template: '{"freq":{{minutes}}}',
         parameters: [
             {
-                name: 'state',
-                type: 'select',
-                label: 'LED State',
-                options: ['on', 'off', 'blink'],
-                defaultValue: 'on',
-                required: true
-            }
-        ],
-        color: 'secondary'
-    },
-    {
-        id: 'set_interval',
-        label: 'Set Interval',
-        description: 'Set telemetry sending interval',
-        template: '{"interval":{{seconds}}}',
-        parameters: [
-            {
-                name: 'seconds',
+                name: 'minutes',
                 type: 'number',
-                label: 'Interval (seconds)',
-                placeholder: 'Enter interval in seconds',
-                defaultValue: 30,
-                required: true
-            }
-        ]
-    },
-    {
-        id: 'set_threshold',
-        label: 'Set Threshold',
-        description: 'Set sensor threshold value',
-        template: '{"threshold":{"sensor":"{{sensor}}","value":{{value}}}}',
-        parameters: [
-            {
-                name: 'sensor',
-                type: 'text',
-                label: 'Sensor Name',
-                placeholder: 'temperature, humidity, etc.',
-                required: true
-            },
-            {
-                name: 'value',
-                type: 'number',
-                label: 'Threshold Value',
-                placeholder: 'Enter threshold value',
-                required: true
-            }
-        ]
-    },
-    {
-        id: 'custom_message',
-        label: 'Custom Message',
-        description: 'Send a custom message',
-        template: '{{message}}',
-        parameters: [
-            {
-                name: 'message',
-                type: 'text',
-                label: 'Message',
-                placeholder: 'Enter custom message',
+                label: 'Frequency (minutes)',
+                placeholder: 'Enter frequency in minutes',
+                defaultValue: 15,
                 required: true
             }
         ],

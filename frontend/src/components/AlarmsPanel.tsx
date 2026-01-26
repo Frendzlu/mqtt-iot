@@ -61,7 +61,7 @@ export default function AlarmsPanel({ alarms, onAcknowledge, onClose }: Props) {
                     <h3>⚡ Unacknowledged Alarms</h3>
                     <div className="alarms-list">
                         {unacknowledgedAlarms.map((alarm) => (
-                            <div key={alarm.id} className={`alarm-item ${getSeverityClass(alarm.severity)}`}>
+                            <div key={`unack-${alarm.id}-${alarm.timestamp}`} className={`alarm-item ${getSeverityClass(alarm.severity)}`}>
                                 <div className="alarm-header">
                                     <span className="alarm-icon">{getSeverityIcon(alarm.severity)}</span>
                                     <span className="alarm-device">{alarm.device_name || alarm.device_mac_address}</span>
@@ -96,7 +96,7 @@ export default function AlarmsPanel({ alarms, onAcknowledge, onClose }: Props) {
                     <h3>✓ Acknowledged Alarms</h3>
                     <div className="alarms-list">
                         {acknowledgedAlarms.map((alarm) => (
-                            <div key={alarm.id} className={`alarm-item acknowledged ${getSeverityClass(alarm.severity)}`}>
+                            <div key={`ack-${alarm.id}-${alarm.timestamp}`} className={`alarm-item acknowledged ${getSeverityClass(alarm.severity)}`}>
                                 <div className="alarm-header">
                                     <span className="alarm-icon">{getSeverityIcon(alarm.severity)}</span>
                                     <span className="alarm-device">{alarm.device_name || alarm.device_mac_address}</span>

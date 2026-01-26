@@ -10,8 +10,6 @@ type Props = {
 export default function CommandBuilder({ onSendCommand, loading }: Props) {
     const [selectedCommandId, setSelectedCommandId] = useState<string>('');
     const [parameterValues, setParameterValues] = useState<Record<string, any>>({});
-    const [showCustomInput, setShowCustomInput] = useState(false);
-    const [customCommand, setCustomCommand] = useState('');
 
     const selectedCommand = COMMAND_CONFIGS.find(cmd => cmd.id === selectedCommandId);
 
@@ -24,7 +22,7 @@ export default function CommandBuilder({ onSendCommand, loading }: Props) {
 
     const buildCommand = (command: CommandConfig): string => {
         let result = command.template;
-        
+
         if (command.parameters) {
             command.parameters.forEach(param => {
                 const value = parameterValues[param.name] ?? param.defaultValue ?? '';
@@ -32,7 +30,7 @@ export default function CommandBuilder({ onSendCommand, loading }: Props) {
                 result = result.replace(new RegExp(placeholder, 'g'), String(value));
             });
         }
-        
+
         return result;
     };
 
@@ -114,7 +112,7 @@ export default function CommandBuilder({ onSendCommand, loading }: Props) {
     return (
         <div className="command-builder">
             <h3>Send Command</h3>
-            
+
             {/* Quick Commands */}
             <div className="quick-commands">
                 <div className="commands-grid">
@@ -141,7 +139,7 @@ export default function CommandBuilder({ onSendCommand, loading }: Props) {
                     {selectedCommand.description && (
                         <p className="command-description">{selectedCommand.description}</p>
                     )}
-                    
+
                     <div className="parameters-form">
                         {selectedCommand.parameters?.map(param => (
                             <div key={param.name} className="parameter-field">
@@ -179,45 +177,6 @@ export default function CommandBuilder({ onSendCommand, loading }: Props) {
                     </div>
                 </div>
             )}
-
-            {/* Custom Command Input */}
-            <div className="custom-command">
-                <button
-                    onClick={() => setShowCustomInput(!showCustomInput)}
-                    className="btn-toggle-custom"
-                >
-                    {showCustomInput ? 'Hide' : 'Show'} Custom Command
-                </button>
-                
-                {showCustomInput && (
-                    <div className="custom-input-area">
-                        <textarea
-                            placeholder="Enter custom command..."
-                            value={customCommand}
-                            onChange={(e) => setCustomCommand(e.target.value)}
-                            rows={3}
-                            className="command-input"
-                            onKeyPress={(e) => {
-                                if (e.key === "Enter" && e.ctrlKey) {
-                                    onSendCommand(customCommand);
-                                    setCustomCommand('');
-                                }
-                            }}
-                        />
-                        <button 
-                            onClick={() => {
-                                onSendCommand(customCommand);
-                                setCustomCommand('');
-                            }} 
-                            disabled={loading || !customCommand.trim()} 
-                            className="btn btn-primary"
-                        >
-                            {loading ? "Sending..." : "Send Custom Command"}
-                        </button>
-                        <p className="hint">Press Ctrl+Enter to send</p>
-                    </div>
-                )}
-            </div>
         </div>
     );
 }

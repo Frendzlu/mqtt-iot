@@ -107,8 +107,17 @@ export default function App() {
 
         s.on("alarm", (alarm: Alarm) => {
             console.log("Alarm received:", alarm);
-            setAlarms((prev) => [alarm, ...prev]);
-            setUnacknowledgedCount((prev) => prev + 1);
+            setAlarms((prev) => {
+                // Check if alarm already exists to prevent duplicates
+                const exists = prev.some(a => a.id === alarm.id);
+                if (exists) {
+                    console.log(`[SOCKET] Alarm ${alarm.id} already exists, skipping duplicate`);
+                    return prev;
+                }
+                // Only increment count when actually adding a new alarm
+                setUnacknowledgedCount((count) => count + 1);
+                return [alarm, ...prev];
+            });
         });
 
         s.on("device-registered", (data: any) => {
