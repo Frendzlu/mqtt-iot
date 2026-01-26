@@ -635,7 +635,7 @@ app.post("/register", async (req, res) => {
     const passwdPath = process.env.MOSQUITTO_PASSWD || "/mosquitto/config/passwd";
     const aclPath = process.env.MOSQUITTO_ACL || "/mosquitto/config/acl";
 
-    exec(`mosquitto_passwd - b ${passwdPath} ${uuid} ${escapeShellArg(password)} `, (err, stdout, stderr) => {
+    exec(`mosquitto_passwd -b ${passwdPath} ${uuid} ${escapeShellArg(password)} `, (err, stdout, stderr) => {
         if (err) {
             console.error("mosquitto_passwd error:", err, stderr);
             // still return success for backend user creation, but notify client
