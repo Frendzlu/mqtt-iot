@@ -27,7 +27,7 @@ DEVICE_MAC_ADDRESS = "AA:BB:CC:DD:EE:FF"  # Unique MAC address for this device
 DEVICE_NAME = "ESP32-Simulator-01"
 
 # User credentials (must exist in backend)
-USER_UUID = "d3e5a6d9-d512-45ba-9c8e-8079b7f044b6"
+USER_UUID = "889a51ee-fb28-4bbf-b08b-5d60442061d7"
 
 # MQTT Broker settings
 MQTT_BROKER = "localhost"  # or your broker IP
@@ -39,7 +39,8 @@ MQTT_PASSWORD = "pass"
 BACKEND_URL = "http://localhost:3001"  # Backend REST API
 
 # Telemetry settings
-TELEMETRY_INTERVAL = 60  # seconds between telemetry batches
+MEASUREMENT_INTERVAL = 5  # minutes between taking measurements
+SEND_INTERVAL = 15  # minutes between sending batched measurements
 BATCH_SIZE = 5  # number of readings per batch
 SEND_SINGULAR_READINGS = True  # Also send some singular readings
 SINGULAR_READING_COUNT = 2  # Number of singular readings per cycle
@@ -53,6 +54,7 @@ MOVEMENT_PROBABILITY = 0.15  # 15% chance of movement detection
 
 # Device state
 device_armed = False  # Whether device should send images on movement
+measurement_buffer = []  # Buffer to store measurements before sending
 
 # ============================================================================
 # MQTT TOPICS
@@ -321,15 +323,15 @@ def send_image(client):
     }
     
     try:
-        # Send via HTTP POST to backend
-        url = f"{BACKEND_URL}/upload-image"
+        # Send via HTTP PUT to backend
+        url = f"{BACKEND_URL}/images/{USER_UUID}/{mac_normalized}"
         payload = {
-            "userUuid": USER_UUID,
-            "macAddress": mac_normalized,
-            "imageData": image_payload
+            "imageId": image_id,
+            "imageData": image_data,
+            "metadata": image_payload["metadata"]
         }
         
-        response = requests.post(url, json=payload, timeout=10)
+        response = requests.put(url, json=payload, timeout=10)
         
         if response.status_code == 200:
             print(f"[IMAGE] ✓ Sent image {image_id} via HTTP ({len(image_data)} bytes)")
@@ -364,7 +366,7 @@ def send_image(client):
 
 def handle_command(client, payload):
     """Handle incoming commands from backend"""
-    global device_armed
+    global device_armed, MEASUREMENT_INTERVAL, SEND_INTERVAL
     
     print(f"\n[COMMAND] Received: {payload}")
     
@@ -378,27 +380,86 @@ def handle_command(client, payload):
             print(f"\t\tStatus: {command.get('status')}, Records: {command.get('recordCount', 'N/A')}")
             return
         
-        # Handle LED control
+        # Get command type
+        cmd_type = command.get("command")
+        
+        # Handle photo command
+        if cmd_type == "photo":
+            print(f"[COMMAND] PHOTO - Taking photo...")
+            send_image(client)
+            print(f"\t\t✓ Photo captured and sent")
+            return
+        
+        # Handle temperature measurement command
+        if cmd_type == "temp":
+            print(f"[COMMAND] TEMP - Taking temperature measurement...")
+            temp_value = generate_temperature_reading()
+            message_id = f"m-cmd-{uuid.uuid4().hex[:6]}"
+            
+            temp_message = {
+                "sensor": "temperature",
+                "value": temp_value,
+                "unit": "C",
+                "isBatch": False,
+                "messageId": message_id
+            }
+            
+            topic = get_topic_telemetry()
+            client.publish(topic, json.dumps(temp_message), qos=1)
+            print(f"\t\tTemperature: {temp_value}°C (sent)")
+            return
+        
+        # Handle arm command
+        if cmd_type == "arm":
+            device_armed = True
+            print(f"[COMMAND] ARM - Device is now ARMED")
+            print(f"\t\tWill send images on motion detection")
+            return
+        
+        # Handle disarm command
+        if cmd_type == "disarm":
+            device_armed = False
+            print(f"[COMMAND] DISARM - Device is now DISARMED")
+            print(f"\t\tWill NOT send images on motion detection")
+            return
+        
+        # Handle measurement interval change
+        if cmd_type == "set_measurement_interval":
+            minutes = command.get("minutes", MEASUREMENT_INTERVAL)
+            MEASUREMENT_INTERVAL = float(minutes)
+            print(f"[COMMAND] SET MEASUREMENT INTERVAL -> {MEASUREMENT_INTERVAL} minutes")
+            print(f"\t\tDevice will take measurements every {MEASUREMENT_INTERVAL} minutes")
+            return
+        
+        # Handle send interval change
+        if cmd_type == "set_send_interval":
+            minutes = command.get("minutes", SEND_INTERVAL)
+            SEND_INTERVAL = float(minutes)
+            print(f"[COMMAND] SET SEND INTERVAL -> {SEND_INTERVAL} minutes")
+            print(f"\t\tDevice will send batched data every {SEND_INTERVAL} minutes")
+            return
+        
+        # Handle LED control (legacy)
         if "led" in command:
             led_state = command["led"]
             print(f"[COMMAND] LED Control -> {led_state}")
-            # Simulate LED action
             if led_state == "on":
-                print("\t\tLED turned ON")
+                print(f"\t\tLED turned ON")
             elif led_state == "off":
-                print("\t\tLED turned OFF")
+                print(f"\t\tLED turned OFF")
             elif led_state == "blink":
-                print("\t\tLED is BLINKING")
+                print(f"\t\tLED is BLINKING")
             return
         
-        # Handle interval change
+        # Handle interval change (legacy)
         if "interval" in command:
             interval = command["interval"]
             print(f"[COMMAND] Set telemetry interval -> {interval} seconds")
-            print(f"\t\tNote: Interval change not implemented in this simulator")
+            SEND_INTERVAL = interval / 60.0  # Convert to minutes
+            print(f"\t\tUpdated send interval to {SEND_INTERVAL} minutes")
             return
         
-        # Handle threshold setting
+        # Handle threshold setting (legacy)
         if "threshold" in command:
             threshold_data = command["threshold"]
             print(f"[COMMAND] Set threshold -> Sensor: {threshold_data.get('sensor')}, Value: {threshold_data.get('value')}")
@@ -414,14 +475,15 @@ def handle_command(client, payload):
         
         if command_text == "STATUS":
             print(f"[COMMAND] STATUS request")
-            print(f"\t\ttDevice: {DEVICE_NAME}")
+            print(f"\t\tDevice: {DEVICE_NAME}")
             print(f"\t\tMAC: {DEVICE_MAC_ADDRESS}")
             print(f"\t\tArmed: {device_armed}")
-            print(f"\t\tUptime: {time.time():.0f}s")
+            print(f"\t\tMeasurement Interval: {MEASUREMENT_INTERVAL} min")
+            print(f"\t\tSend Interval: {SEND_INTERVAL} min")
         
         elif command_text == "RESET":
             print(f"[COMMAND] RESET request")
-            print(f"\t\t🔄 Device would reset now (simulation)")
+            print(f"\t\tDevice would reset now (simulation)")
         
         elif "ARM" in command_text:
             device_armed = True
@@ -447,7 +509,8 @@ def main():
     print(f"MAC: {DEVICE_MAC_ADDRESS}")
     print(f"User UUID: {USER_UUID}")
     print(f"Broker: {MQTT_BROKER}:{MQTT_PORT}")
-    print(f"Telemetry Interval: {TELEMETRY_INTERVAL}s")
+    print(f"Measurement Interval: {MEASUREMENT_INTERVAL} min")
+    print(f"Send Interval: {SEND_INTERVAL} min")
     print(f"Batch Size: {BATCH_SIZE} readings")
     print("=" * 70)
     
@@ -471,8 +534,8 @@ def main():
     try:
         client.connect(MQTT_BROKER, MQTT_PORT, 60)
     except Exception as e:
-        print(f"\n❌ Failed to connect to MQTT broker: {e}")
-        print(f"   Make sure the broker is running at {MQTT_BROKER}:{MQTT_PORT}")
+        print(f"\nFailed to connect to MQTT broker: {e}")
+        print(f"\tMake sure the broker is running at {MQTT_BROKER}:{MQTT_PORT}")
         return
     
     # Start network loop in background thread
@@ -483,19 +546,29 @@ def main():
     time.sleep(3)
     
     # Main telemetry loop
-    print(f"\n[DEVICE] Starting telemetry loop (every {TELEMETRY_INTERVAL}s)")
-    print("         Press Ctrl+C to stop\n")
+    print(f"\n[DEVICE] Starting telemetry loop")
+    print(f"\t\tMeasurements every {MEASUREMENT_INTERVAL} min")
+    print(f"\t\tSending batches every {SEND_INTERVAL} min")
+    print("\t\tPress Ctrl+C to stop\n")
     
     try:
-        last_telemetry = 0
+        last_measurement = 0
+        last_send = 0
         
         while True:
             current_time = time.time()
             
-            # Send telemetry batch at interval
-            if current_time - last_telemetry >= TELEMETRY_INTERVAL:
+            # Take measurements at measurement interval (store in buffer)
+            if current_time - last_measurement >= MEASUREMENT_INTERVAL * 60:
+                print(f"\n[MEASUREMENT] Taking readings at {datetime.now().strftime('%H:%M:%S')}")
+                # In a real device, these would be stored in buffer
+                # For simulator, we'll generate them when sending
+                last_measurement = current_time
+            
+            # Send telemetry batch at send interval
+            if current_time - last_send >= SEND_INTERVAL * 60:
                 send_telemetry_batch(client)
-                last_telemetry = current_time
+                last_send = current_time
             
             # Sleep briefly to prevent busy loop
             time.sleep(1)
