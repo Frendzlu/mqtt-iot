@@ -214,7 +214,7 @@ export default function DeviceDashboard({ device, userUuid, backendUrl, refreshT
                             borderRadius: '6px',
                             display: 'inline-block'
                         }}>
-                            📜 Historical Device - View-only mode (device is no longer active for your account)
+                            Historical Device - View-only mode (device is no longer active for your account)
                         </p>
                     )}
                 </div>

@@ -409,7 +409,7 @@ mqttClient.on("message", async (topic, message) => {
 
     if (parts.length >= 5 && parts[2] === "devices") {
         const userUuid = parts[1];
-        const deviceMacAddress = parts[3];
+        const deviceMacAddress = parts[3].toUpperCase(); // Normalize to uppercase for database consistency
         const messageType = parts[4];
 
         const user = users.get(userUuid);
@@ -492,6 +492,7 @@ mqttClient.on("message", async (topic, message) => {
             // Store alarm in database first to get the ID
             storeAlarm(alarm)
                 .then((storedAlarm) => {
+                    console.log(`[ALARM] Stored alarm ${storedAlarm.id}, broadcasting to room ${userUuid}`);
                     // Broadcast alarm to frontend via Socket.IO with the database ID
                     io.to(userUuid).emit("alarm", storedAlarm);
                 })
@@ -1220,9 +1221,10 @@ app.delete("/images/:userUuid/:macAddress/:imageId", async (req, res) => {
 // PUT endpoint for uploading images (alternative to MQTT)
 // Expected body: { "imageId": "img-123", "imageData": "base64...", "metadata": {...} }
 app.put("/images/:userUuid/:macAddress", async (req, res) => {
-    const { userUuid, macAddress } = req.params;
+    const { userUuid } = req.params;
+    const macAddress = req.params.macAddress.toUpperCase(); // Normalize to uppercase
     const { imageId, imageData, metadata } = req.body;
-
+    console.log(`[IMAGE] Received PUT image upload: userUuid=${userUuid}, macAddress=${macAddress}, imageId=${imageId}`);
     // Validate user exists
     const user = users.get(userUuid);
     if (!user) {
@@ -1232,6 +1234,7 @@ app.put("/images/:userUuid/:macAddress", async (req, res) => {
     // Validate device exists for user
     const device = user.devices.find((d) => d.macAddress.toUpperCase() === macAddress.toUpperCase());
     if (!device) {
+        console.log(user.devices);
         return res.status(404).json({ error: "Device not found" });
     }
 

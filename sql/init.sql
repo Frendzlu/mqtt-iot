@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS devices (
 CREATE TABLE IF NOT EXISTS telemetry (
     id SERIAL PRIMARY KEY,
     user_uuid VARCHAR(255) NOT NULL REFERENCES users(uuid) ON DELETE CASCADE,
-    device_mac_address VARCHAR(255) NOT NULL REFERENCES devices(mac_address) ON DELETE CASCADE,
+    device_mac_address VARCHAR(255) NOT NULL,
     device_name VARCHAR(255),
     sensor_name VARCHAR(255),
     message TEXT NOT NULL,
@@ -34,21 +34,23 @@ CREATE TABLE IF NOT EXISTS telemetry (
     unit VARCHAR(50),
     timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     message_id VARCHAR(255),
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    FOREIGN KEY (device_mac_address, user_uuid) REFERENCES devices(mac_address, user_uuid) ON DELETE CASCADE
 );
 
 -- Alarms table: stores alarm events from devices
 CREATE TABLE IF NOT EXISTS alarms (
     id SERIAL PRIMARY KEY,
     user_uuid VARCHAR(255) NOT NULL REFERENCES users(uuid) ON DELETE CASCADE,
-    device_mac_address VARCHAR(255) NOT NULL REFERENCES devices(mac_address) ON DELETE CASCADE,
+    device_mac_address VARCHAR(255) NOT NULL,
     device_name VARCHAR(255),
     severity VARCHAR(20) NOT NULL DEFAULT 'info',
     message TEXT NOT NULL,
     acknowledged BOOLEAN NOT NULL DEFAULT FALSE,
     acknowledged_at TIMESTAMPTZ,
     timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    FOREIGN KEY (device_mac_address, user_uuid) REFERENCES devices(mac_address, user_uuid) ON DELETE CASCADE
 );
 
 -- Images table: stores images from devices
@@ -56,7 +58,7 @@ CREATE TABLE IF NOT EXISTS alarms (
 CREATE TABLE IF NOT EXISTS images (
     id SERIAL PRIMARY KEY,
     user_uuid VARCHAR(255) NOT NULL REFERENCES users(uuid) ON DELETE CASCADE,
-    device_mac_address VARCHAR(255) NOT NULL REFERENCES devices(mac_address) ON DELETE CASCADE,
+    device_mac_address VARCHAR(255) NOT NULL,
     device_name VARCHAR(255),
     image_id VARCHAR(255) NOT NULL,
     image_data TEXT,
@@ -65,7 +67,8 @@ CREATE TABLE IF NOT EXISTS images (
     metadata JSONB,
     timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     message_id VARCHAR(255),
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    FOREIGN KEY (device_mac_address, user_uuid) REFERENCES devices(mac_address, user_uuid) ON DELETE CASCADE
 );
 
 -- Indexes for better query performance

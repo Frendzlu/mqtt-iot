@@ -27,13 +27,13 @@ DEVICE_MAC_ADDRESS = "AA:BB:CC:DD:EE:FF"  # Unique MAC address for this device
 DEVICE_NAME = "ESP32-Simulator-01"
 
 # User credentials (must exist in backend)
-USER_UUID = "3424e26e-8a7c-4b9c-a3c8-6e6d82891a38"
+USER_UUID = "d3e5a6d9-d512-45ba-9c8e-8079b7f044b6"
 
 # MQTT Broker settings
 MQTT_BROKER = "localhost"  # or your broker IP
 MQTT_PORT = 1883
 MQTT_USERNAME = USER_UUID  # Set if broker requires auth
-MQTT_PASSWORD = "amator"
+MQTT_PASSWORD = "pass"
 
 # Backend HTTP settings
 BACKEND_URL = "http://localhost:3001"  # Backend REST API
@@ -375,7 +375,7 @@ def handle_command(client, payload):
         # Handle acknowledgment messages
         if command.get("type") == "ack":
             print(f"[ACK] Backend acknowledged message {command.get('messageId')}")
-            print(f"      Status: {command.get('status')}, Records: {command.get('recordCount', 'N/A')}")
+            print(f"\t\tStatus: {command.get('status')}, Records: {command.get('recordCount', 'N/A')}")
             return
         
         # Handle LED control
@@ -384,18 +384,18 @@ def handle_command(client, payload):
             print(f"[COMMAND] LED Control -> {led_state}")
             # Simulate LED action
             if led_state == "on":
-                print("         💡 LED turned ON")
+                print("\t\tLED turned ON")
             elif led_state == "off":
-                print("         💡 LED turned OFF")
+                print("\t\tLED turned OFF")
             elif led_state == "blink":
-                print("         💡 LED is BLINKING")
+                print("\t\tLED is BLINKING")
             return
         
         # Handle interval change
         if "interval" in command:
             interval = command["interval"]
             print(f"[COMMAND] Set telemetry interval -> {interval} seconds")
-            print(f"         ⚠️  Note: Interval change not implemented in this simulator")
+            print(f"\t\tNote: Interval change not implemented in this simulator")
             return
         
         # Handle threshold setting
@@ -414,14 +414,14 @@ def handle_command(client, payload):
         
         if command_text == "STATUS":
             print(f"[COMMAND] STATUS request")
-            print(f"         Device: {DEVICE_NAME}")
-            print(f"         MAC: {DEVICE_MAC_ADDRESS}")
-            print(f"         Armed: {device_armed}")
-            print(f"         Uptime: {time.time():.0f}s")
+            print(f"\t\ttDevice: {DEVICE_NAME}")
+            print(f"\t\tMAC: {DEVICE_MAC_ADDRESS}")
+            print(f"\t\tArmed: {device_armed}")
+            print(f"\t\tUptime: {time.time():.0f}s")
         
         elif command_text == "RESET":
             print(f"[COMMAND] RESET request")
-            print(f"         🔄 Device would reset now (simulation)")
+            print(f"\t\t🔄 Device would reset now (simulation)")
         
         elif "ARM" in command_text:
             device_armed = True
@@ -453,8 +453,8 @@ def main():
     
     # Validate configuration
     if USER_UUID == "your-user-uuid-here":
-        print("\n⚠️  ERROR: Please set USER_UUID in the script configuration!")
-        print("   You can get this from the backend or login response.")
+        print("\nERROR: Please set USER_UUID in the script configuration!")
+        print("\tYou can get this from the backend or login response.")
         return
     
     # Create MQTT client
