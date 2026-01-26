@@ -204,6 +204,19 @@ export default function DeviceDashboard({ device, userUuid, backendUrl, refreshT
                 <div>
                     <h2>📱 {device.name}</h2>
                     <p className="device-id">MAC: {device.macAddress}</p>
+                    {device.active === false && (
+                        <p style={{
+                            color: '#f59e0b',
+                            fontSize: '14px',
+                            marginTop: '8px',
+                            padding: '8px 12px',
+                            background: '#fef3c7',
+                            borderRadius: '6px',
+                            display: 'inline-block'
+                        }}>
+                            📜 Historical Device - View-only mode (device is no longer active for your account)
+                        </p>
+                    )}
                 </div>
                 <div className="header-controls">
                     {sensors.length > 0 && (

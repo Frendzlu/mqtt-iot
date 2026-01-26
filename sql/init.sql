@@ -10,12 +10,16 @@ CREATE TABLE IF NOT EXISTS users (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Devices table: stores devices for each user
+-- Devices table: stores devices for each user (with ownership history)
+-- Composite primary key (mac_address, user_uuid) allows tracking device ownership history
+-- Only one entry per device can be active=true (enforced by unique index)
 CREATE TABLE IF NOT EXISTS devices (
-    mac_address VARCHAR(255) PRIMARY KEY,
+    mac_address VARCHAR(255) NOT NULL,
     user_uuid VARCHAR(255) NOT NULL REFERENCES users(uuid) ON DELETE CASCADE,
     name VARCHAR(255) NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (mac_address, user_uuid)
 );
 
 -- Telemetry table: stores time series data from devices
@@ -66,6 +70,9 @@ CREATE TABLE IF NOT EXISTS images (
 
 -- Indexes for better query performance
 CREATE INDEX IF NOT EXISTS idx_devices_user ON devices(user_uuid);
+CREATE INDEX IF NOT EXISTS idx_devices_active ON devices(user_uuid, active);
+CREATE INDEX IF NOT EXISTS idx_devices_mac_active ON devices(mac_address, active);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_mac_active_unique ON devices(mac_address) WHERE active = TRUE;
 CREATE INDEX IF NOT EXISTS idx_telemetry_user_device ON telemetry(user_uuid, device_mac_address);
 CREATE INDEX IF NOT EXISTS idx_telemetry_timestamp ON telemetry(timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_telemetry_sensor ON telemetry(user_uuid, device_mac_address, sensor_name);
@@ -80,7 +87,8 @@ CREATE INDEX IF NOT EXISTS idx_images_file_path ON images(file_path);
 
 -- Comments for documentation
 COMMENT ON TABLE users IS 'Stores user accounts with authentication credentials';
-COMMENT ON TABLE devices IS 'Stores IoT devices owned by users';
+COMMENT ON TABLE devices IS 'Stores IoT devices owned by users with ownership history (active flag indicates current owner)';
+COMMENT ON COLUMN devices.active IS 'Whether this device is currently owned by this user (false for historical ownership)';
 COMMENT ON TABLE telemetry IS 'Stores time series telemetry data from IoT devices';
 COMMENT ON TABLE alarms IS 'Stores alarm and alert events from IoT devices';
 COMMENT ON TABLE images IS 'Stores images captured by IoT devices';

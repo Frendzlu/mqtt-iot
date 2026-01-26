@@ -1,6 +1,7 @@
 export type Device = {
     macAddress: string;
     name: string;
+    active?: boolean; // Optional for backward compatibility, indicates if device is currently owned
 };
 
 export type Alarm = {

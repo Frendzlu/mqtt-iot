@@ -6,12 +6,22 @@ A full-stack IoT device management system with real-time telemetry monitoring, t
 
 - User Authentication with secure password hashing
 - Device Management for multiple IoT devices
+- **Device Ownership History** - Transfer devices between users while preserving historical data access
 - Time Series Visualization with real-time charts
 - Alarm System with acknowledgment tracking
 - Image Capture and storage from IoT devices
 - PostgreSQL for persistent storage
 - MQTT Integration with authentication and ACLs
 - Modern responsive UI with React + TypeScript
+
+### Device Ownership & Historical Data
+
+When a device is transferred from one user to another:
+- The new user gains full control of the device and receives all future data
+- The previous owner retains read-only access to historical data (telemetry, alarms, images)
+- Historical devices are displayed separately in the UI with a "📜" icon
+- All historical data remains associated with the original owner in the database
+- Devices can be reassigned back to previous owners, reactivating their access
 
 ## Architecture
 

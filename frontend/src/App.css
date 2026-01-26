@@ -216,6 +216,31 @@ body {
   border-color: var(--primary);
 }
 
+.device-item.inactive {
+  opacity: 0.6;
+  font-style: italic;
+  background: #f3f4f6;
+  border-style: dashed;
+}
+
+.device-item.inactive:hover {
+  opacity: 0.8;
+  background: #e5e7eb;
+}
+
+.device-item.inactive.active {
+  opacity: 1;
+  background: var(--primary);
+  color: white;
+  border-color: var(--primary);
+  border-style: solid;
+}
+
+.inactive-badge {
+  font-size: 16px;
+  margin-left: auto;
+}
+
 .device-icon {
   font-size: 20px;
 }

@@ -187,7 +187,7 @@ export default function App() {
                     <div className="sidebar-section">
                         <h3>Devices</h3>
                         <div className="device-list">
-                            {devices.map((device) => (
+                            {devices.filter(d => d.active !== false).map((device) => (
                                 <button
                                     key={device.macAddress}
                                     className={`device-item ${selectedDevice?.macAddress === device.macAddress ? 'active' : ''}`}
@@ -197,12 +197,31 @@ export default function App() {
                                     <span className="device-name">{device.name}</span>
                                 </button>
                             ))}
-                            {devices.length === 0 && (
+                            {devices.filter(d => d.active !== false).length === 0 && (
                                 <p style={{ padding: '16px', textAlign: 'center', color: '#666' }}>
                                     No devices yet. Devices auto-register via MQTT.
                                 </p>
                             )}
                         </div>
+                        {devices.filter(d => d.active === false).length > 0 && (
+                            <>
+                                <h4 style={{ marginTop: '16px', color: '#888', fontSize: '0.9em' }}>Historical Devices</h4>
+                                <div className="device-list">
+                                    {devices.filter(d => d.active === false).map((device) => (
+                                        <button
+                                            key={device.macAddress}
+                                            className={`device-item inactive ${selectedDevice?.macAddress === device.macAddress ? 'active' : ''}`}
+                                            onClick={() => setSelectedDevice(device)}
+                                            title="This device was previously owned by you. You can view historical data only."
+                                        >
+                                            <span className="device-icon">📱</span>
+                                            <span className="device-name">{device.name}</span>
+                                            <span className="inactive-badge">{"(Not Active)"}</span>
+                                        </button>
+                                    ))}
+                                </div>
+                            </>
+                        )}
                     </div>
 
                     <div className="sidebar-section mqtt-info">

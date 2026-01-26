@@ -27,13 +27,13 @@ DEVICE_MAC_ADDRESS = "AA:BB:CC:DD:EE:FF"  # Unique MAC address for this device
 DEVICE_NAME = "ESP32-Simulator-01"
 
 # User credentials (must exist in backend)
-USER_UUID = "82563b3f-fd92-46e5-a869-a3227237f419"
+USER_UUID = "3424e26e-8a7c-4b9c-a3c8-6e6d82891a38"
 
 # MQTT Broker settings
 MQTT_BROKER = "localhost"  # or your broker IP
 MQTT_PORT = 1883
 MQTT_USERNAME = USER_UUID  # Set if broker requires auth
-MQTT_PASSWORD = "test"
+MQTT_PASSWORD = "amator"
 
 # Backend HTTP settings
 BACKEND_URL = "http://localhost:3001"  # Backend REST API

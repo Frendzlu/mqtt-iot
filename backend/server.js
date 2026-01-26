@@ -53,13 +53,17 @@ async function loadUsersFromDB() {
             devices: []
         }));
 
-        // Load devices for each user
-        const devicesResult = await pool.query('SELECT mac_address, user_uuid, name FROM devices');
+        // Load devices for each user (including inactive ones for historical data access)
+        const devicesResult = await pool.query('SELECT mac_address, user_uuid, name, active FROM devices ORDER BY active DESC, created_at DESC');
         for (const deviceRow of devicesResult.rows) {
             const user = users.find(u => u.uuid === deviceRow.user_uuid);
             if (user) {
                 // Normalize MAC address to uppercase for consistency
-                user.devices.push({ macAddress: deviceRow.mac_address.toUpperCase(), name: deviceRow.name });
+                user.devices.push({
+                    macAddress: deviceRow.mac_address.toUpperCase(),
+                    name: deviceRow.name,
+                    active: deviceRow.active
+                });
             }
         }
 
@@ -139,19 +143,51 @@ mqttClient.on("message", async (topic, message) => {
 
         if (existingDevice && existingUser && existingUser.uuid !== userUuid) {
             // Device exists for another user - reassign it
-            // Historical data stays with the old user, new data goes to new user
+            // Historical data stays with the old user, old device becomes inactive
             console.log(`[DEVICE-REGISTER] Reassigning device ${deviceMacAddress} from user ${existingUser.username} to ${user.username}`);
 
             try {
-                // Update device ownership in database (but leave historical data with old user)
-                await pool.query('UPDATE devices SET user_uuid = $1, name = $2 WHERE UPPER(mac_address) = UPPER($3)', [userUuid, deviceName, deviceMacAddress]);
+                // Mark old device as inactive (preserves historical data access)
+                await pool.query(
+                    'UPDATE devices SET active = FALSE WHERE UPPER(mac_address) = UPPER($1) AND user_uuid = $2',
+                    [deviceMacAddress, existingUser.uuid]
+                );
 
-                // Update in-memory data
-                existingUser.devices = existingUser.devices.filter(d => d.macAddress !== deviceMacAddress);
-                const reassignedDevice = { macAddress: deviceMacAddress, name: deviceName };
-                user.devices.push(reassignedDevice);
+                // Check if device already exists for new user (from previous ownership)
+                const existingForNewUser = await pool.query(
+                    'SELECT mac_address FROM devices WHERE UPPER(mac_address) = UPPER($1) AND user_uuid = $2',
+                    [deviceMacAddress, userUuid]
+                );
 
-                console.log(`[DEVICE-REGISTER] Reassigned device: ${deviceName} (${deviceMacAddress}) to user ${user.username}. Historical data remains with ${existingUser.username}`);
+                if (existingForNewUser.rows.length > 0) {
+                    // Device previously belonged to this user, reactivate it
+                    await pool.query(
+                        'UPDATE devices SET active = TRUE, name = $1 WHERE UPPER(mac_address) = UPPER($2) AND user_uuid = $3',
+                        [deviceName, deviceMacAddress, userUuid]
+                    );
+                } else {
+                    // Create new device entry for new user
+                    await pool.query(
+                        'INSERT INTO devices (mac_address, user_uuid, name, active) VALUES ($1, $2, $3, TRUE)',
+                        [deviceMacAddress, userUuid, deviceName]
+                    );
+                }
+
+                // Update in-memory data - mark old device as inactive
+                if (existingDevice) {
+                    existingDevice.active = false;
+                }
+
+                // Add or update device in new user's list
+                const newUserDevice = user.devices.find(d => d.macAddress.toUpperCase() === deviceMacAddress);
+                if (newUserDevice) {
+                    newUserDevice.active = true;
+                    newUserDevice.name = deviceName;
+                } else {
+                    user.devices.push({ macAddress: deviceMacAddress, name: deviceName, active: true });
+                }
+
+                console.log(`[DEVICE-REGISTER] Reassigned device: ${deviceName} (${deviceMacAddress}) to user ${user.username}. Historical data remains accessible to ${existingUser.username}`);
 
                 // Send response back to device
                 const responseTopic = `/${userUuid}/devices/register-response`;
@@ -189,7 +225,7 @@ mqttClient.on("message", async (topic, message) => {
             if (existingDevice.name !== deviceName) {
                 // Update device name only
                 try {
-                    await pool.query('UPDATE devices SET name = $1 WHERE UPPER(mac_address) = UPPER($2)', [deviceName, deviceMacAddress]);
+                    await pool.query('UPDATE devices SET name = $1 WHERE UPPER(mac_address) = UPPER($2) AND user_uuid = $3', [deviceName, deviceMacAddress, userUuid]);
                     existingDevice.name = deviceName;
                     console.log(`[DEVICE-REGISTER] Updated device name: ${deviceName} (${deviceMacAddress})`);
 
@@ -233,45 +269,75 @@ mqttClient.on("message", async (topic, message) => {
 
         // Create new device - but first check database to be absolutely sure it doesn't exist
         try {
-            // Double-check in database using case-insensitive search
-            const existingInDB = await pool.query('SELECT mac_address, user_uuid, name FROM devices WHERE UPPER(mac_address) = UPPER($1)', [deviceMacAddress]);
+            // Double-check in database using case-insensitive search (check for active devices)
+            const existingInDB = await pool.query('SELECT mac_address, user_uuid, name, active FROM devices WHERE UPPER(mac_address) = UPPER($1)', [deviceMacAddress]);
 
             if (existingInDB.rows.length > 0) {
-                const dbDevice = existingInDB.rows[0];
+                // Find if there's an active device for any user
+                const activeDevice = existingInDB.rows.find(d => d.active);
+                const deviceForCurrentUser = existingInDB.rows.find(d => d.user_uuid === userUuid);
+
                 console.log(`[DEVICE-REGISTER] Device ${deviceMacAddress} found in database but not in memory - syncing...`);
 
-                if (dbDevice.user_uuid === userUuid) {
-                    // Device belongs to current user - just sync to memory
-                    const syncedDevice = { macAddress: deviceMacAddress, name: dbDevice.name };
+                if (deviceForCurrentUser && deviceForCurrentUser.active) {
+                    // Device belongs to current user and is active - just sync to memory
+                    const syncedDevice = { macAddress: deviceMacAddress, name: deviceForCurrentUser.name, active: true };
                     if (!user.devices.find(d => d.macAddress.toUpperCase() === deviceMacAddress)) {
                         user.devices.push(syncedDevice);
                     }
 
-                    console.log(`[DEVICE-REGISTER] Synced existing device: ${dbDevice.name} (${deviceMacAddress}) for user ${user.username}`);
+                    console.log(`[DEVICE-REGISTER] Synced existing active device: ${deviceForCurrentUser.name} (${deviceMacAddress}) for user ${user.username}`);
 
                     // Send response back to device
                     const responseTopic = `/${userUuid}/devices/register-response`;
                     const responseMessage = JSON.stringify({
-                        name: dbDevice.name,
+                        name: deviceForCurrentUser.name,
                         macAddress: deviceMacAddress,
                         status: "synced",
                         timestamp: new Date().toISOString()
                     });
                     mqttClient.publish(responseTopic, responseMessage);
                     return;
-                } else {
+                } else if (activeDevice && activeDevice.user_uuid !== userUuid) {
                     // Device belongs to different user - reassign
-                    await pool.query('UPDATE devices SET user_uuid = $1, name = $2 WHERE UPPER(mac_address) = UPPER($3)', [userUuid, deviceName, deviceMacAddress]);
+                    // Mark old device as inactive
+                    await pool.query(
+                        'UPDATE devices SET active = FALSE WHERE UPPER(mac_address) = UPPER($1) AND user_uuid = $2',
+                        [deviceMacAddress, activeDevice.user_uuid]
+                    );
+
+                    // Mark old user's device as inactive in memory
+                    const oldUser = users.get(activeDevice.user_uuid);
+                    if (oldUser) {
+                        const oldDevice = oldUser.devices.find(d => d.macAddress.toUpperCase() === deviceMacAddress);
+                        if (oldDevice) {
+                            oldDevice.active = false;
+                        }
+                    }
+
+                    // Activate or create device for new user
+                    if (deviceForCurrentUser) {
+                        // Reactivate existing device entry
+                        await pool.query(
+                            'UPDATE devices SET active = TRUE, name = $1 WHERE UPPER(mac_address) = UPPER($2) AND user_uuid = $3',
+                            [deviceName, deviceMacAddress, userUuid]
+                        );
+                    } else {
+                        // Create new device entry
+                        await pool.query(
+                            'INSERT INTO devices (mac_address, user_uuid, name, active) VALUES ($1, $2, $3, TRUE)',
+                            [deviceMacAddress, userUuid, deviceName]
+                        );
+                    }
 
                     // Update in-memory data
-                    const reassignedDevice = { macAddress: deviceMacAddress, name: deviceName };
-                    user.devices.push(reassignedDevice);
-
-                    // Remove from old user's memory if they exist
-                    for (const [otherUserUuid, otherUserData] of users) {
-                        if (otherUserUuid !== userUuid) {
-                            otherUserData.devices = otherUserData.devices.filter(d => d.macAddress.toUpperCase() !== deviceMacAddress);
-                        }
+                    const reassignedDevice = { macAddress: deviceMacAddress, name: deviceName, active: true };
+                    const existingInMemory = user.devices.find(d => d.macAddress.toUpperCase() === deviceMacAddress);
+                    if (existingInMemory) {
+                        existingInMemory.active = true;
+                        existingInMemory.name = deviceName;
+                    } else {
+                        user.devices.push(reassignedDevice);
                     }
 
                     console.log(`[DEVICE-REGISTER] Reassigned device from database: ${deviceName} (${deviceMacAddress}) to user ${user.username}`);
@@ -297,11 +363,11 @@ mqttClient.on("message", async (topic, message) => {
             }
 
             // Device truly doesn't exist - create it
-            const newDevice = { macAddress: deviceMacAddress, name: deviceName };
+            const newDevice = { macAddress: deviceMacAddress, name: deviceName, active: true };
 
             // Save to database
             await pool.query(
-                'INSERT INTO devices (mac_address, user_uuid, name) VALUES ($1, $2, $3)',
+                'INSERT INTO devices (mac_address, user_uuid, name, active) VALUES ($1, $2, $3, TRUE)',
                 [deviceMacAddress, userUuid, deviceName]
             );
 
@@ -325,7 +391,6 @@ mqttClient.on("message", async (topic, message) => {
                 deviceName: deviceName,
                 timestamp: new Date().toISOString()
             });
-
         } catch (err) {
             console.error('[DEVICE-REGISTER] Database error:', err);
             const responseTopic = `/${userUuid}/devices/register-response`;
@@ -350,7 +415,7 @@ mqttClient.on("message", async (topic, message) => {
         const user = users.get(userUuid);
         if (!user) return;
 
-        const device = user.devices.find((d) => d.macAddress === deviceMacAddress);
+        const device = user.devices.find((d) => d.macAddress.toUpperCase() === deviceMacAddress.toUpperCase());
         const deviceName = device ? device.name : "Unknown";
 
         // Handle telemetry messages
@@ -746,27 +811,38 @@ app.post("/add-device", async (req, res) => {
         }
 
         // Double-check in database using case-insensitive search
-        const existingInDB = await pool.query('SELECT mac_address, user_uuid, name FROM devices WHERE UPPER(mac_address) = UPPER($1)', [deviceMacAddress]);
+        const existingInDB = await pool.query('SELECT mac_address, user_uuid, name, active FROM devices WHERE UPPER(mac_address) = UPPER($1)', [deviceMacAddress]);
 
         if (existingInDB.rows.length > 0) {
-            const dbDevice = existingInDB.rows[0];
-            if (dbDevice.user_uuid === userUuid) {
-                // Device exists for current user - sync to memory
-                const syncedDevice = { macAddress: deviceMacAddress, name: dbDevice.name };
+            const activeDevice = existingInDB.rows.find(d => d.active);
+            const deviceForCurrentUser = existingInDB.rows.find(d => d.user_uuid === userUuid);
+
+            if (deviceForCurrentUser && deviceForCurrentUser.active) {
+                // Device exists for current user and is active - sync to memory
+                const syncedDevice = { macAddress: deviceMacAddress, name: deviceForCurrentUser.name, active: true };
                 if (!user.devices.find(d => d.macAddress.toUpperCase() === deviceMacAddress)) {
                     user.devices.push(syncedDevice);
                 }
                 return res.json({ ...syncedDevice, status: "synced" });
-            } else {
-                return res.status(409).json({ error: "Device already exists for another user" });
+            } else if (activeDevice) {
+                return res.status(409).json({ error: "Device is currently active for another user" });
+            } else if (deviceForCurrentUser) {
+                // Device previously belonged to this user, reactivate it
+                await pool.query(
+                    'UPDATE devices SET active = TRUE, name = $1 WHERE UPPER(mac_address) = UPPER($2) AND user_uuid = $3',
+                    [deviceName, deviceMacAddress, userUuid]
+                );
+                deviceForCurrentUser.active = true;
+                deviceForCurrentUser.name = deviceName;
+                return res.json({ macAddress: deviceMacAddress, name: deviceName, active: true, status: "reactivated" });
             }
         }
 
-        const device = { macAddress: deviceMacAddress, name: deviceName };
+        const device = { macAddress: deviceMacAddress, name: deviceName, active: true };
 
         // Save to database
         await pool.query(
-            'INSERT INTO devices (mac_address, user_uuid, name) VALUES ($1, $2, $3)',
+            'INSERT INTO devices (mac_address, user_uuid, name, active) VALUES ($1, $2, $3, TRUE)',
             [deviceMacAddress, userUuid, deviceName]
         );
 
@@ -1154,7 +1230,7 @@ app.put("/images/:userUuid/:macAddress", async (req, res) => {
     }
 
     // Validate device exists for user
-    const device = user.devices.find((d) => d.macAddress === macAddress);
+    const device = user.devices.find((d) => d.macAddress.toUpperCase() === macAddress.toUpperCase());
     if (!device) {
         return res.status(404).json({ error: "Device not found" });
     }
