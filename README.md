@@ -182,54 +182,78 @@ Content-Type: application/json
 
 #### Get Device Telemetry
 ```http
-GET /telemetry/:userUuid/:macAddress?limit=100&sensor=temperature
+GET /telemetry/:userUuid/:macAddress?limit=100&sensor=temperature&hours=24&startDate=2026-01-01&endDate=2026-01-31
 ```
 
 Query Parameters:
-- `limit` (optional): Number of records to return (default: 100)
+- `limit` (optional): Number of records to return (default: 100, max: 10000)
 - `sensor` (optional): Filter by sensor name
+- `hours` (optional): Get data from last N hours (0 = all time, max: 8760)
+- `startDate` (optional): Custom date range start (ISO 8601 format)
+- `endDate` (optional): Custom date range end (ISO 8601 format)
 
 **Response:**
 ```json
-{
-  "data": [
-    {
-      "id": 1,
-      "sensor_name": "temperature",
-      "value": 25.5,
-      "unit": "C",
-      "timestamp": "2026-01-13T10:00:00Z",
-      "message_id": "msg-123"
-    }
-  ]
-}
+[
+  {
+    "id": 1,
+    "device_mac_address": "00_11_22_33_44_55",
+    "device_name": "Temperature Sensor",
+    "sensor_name": "temperature",
+    "message": "{\"sensor\":\"temperature\",\"value\":25.5,\"unit\":\"C\"}",
+    "value": 25.5,
+    "unit": "C",
+    "timestamp": "2026-01-13T10:00:00Z"
+  }
+]
+```
+
+#### Get Device Sensors
+```http
+GET /sensors/:userUuid/:macAddress
+```
+
+**Response:**
+```json
+[
+  {
+    "sensor_name": "temperature",
+    "reading_count": 1520,
+    "last_reading": "2026-01-28T10:00:00Z"
+  },
+  {
+    "sensor_name": "humidity",
+    "reading_count": 1520,
+    "last_reading": "2026-01-28T10:00:00Z"
+  }
+]
 ```
 
 ### Alarm Management
 
 #### Get User Alarms
 ```http
-GET /alarms/:userUuid?limit=50
+GET /alarms/:userUuid?limit=50&acknowledged=false
 ```
 
 Query Parameters:
 - `limit` (optional): Number of alarms to return (default: 50)
+- `acknowledged` (optional): Filter by acknowledgment status (true/false)
 
 **Response:**
 ```json
-{
-  "alarms": [
-    {
-      "id": 1,
-      "device_id": "device-001",
-      "device_name": "Temperature Sensor",
-      "severity": "critical",
-      "message": "Temperature exceeded 50C",
-      "acknowledged": false,
-      "timestamp": "2026-01-13T10:00:00Z"
-    }
-  ]
-}
+[
+  {
+    "id": 1,
+    "device_mac_address": "00_11_22_33_44_55",
+    "device_name": "Temperature Sensor",
+    "severity": "critical",
+    "message": "Temperature exceeded 50C",
+    "acknowledged": false,
+    "acknowledged_at": null,
+    "timestamp": "2026-01-13T10:00:00Z"
+  }
+]
 ```
 
 #### Acknowledge Alarm
@@ -259,14 +283,15 @@ GET /images/:userUuid/:macAddress?limit=20
     "image_id": "img-001",
     "device_name": "Camera Sensor",
     "file_path": "uuid_macAddress_imageId_timestamp.png",
-    "file_size": "3562844",
+    "file_size": 3562844,
     "metadata": {
       "width": 1888,
       "height": 1750,
       "format": "png",
       "camera": "RealCamera"
     },
-    "timestamp": "2026-01-13T10:00:00Z"
+    "timestamp": "2026-01-13T10:00:00Z",
+    "message_id": "msg-img-001"
   }
 ]
 ```
@@ -277,6 +302,46 @@ GET /images/:userUuid/:macAddress/:imageId/file
 ```
 
 Returns the actual image file with appropriate `Content-Type` header.
+
+#### Upload Image (Alternative to MQTT)
+```http
+PUT /images/:userUuid/:macAddress
+Content-Type: application/json
+
+{
+  "imageId": "img-789",
+  "imageData": "<base64-encoded-image>",
+  "metadata": {
+    "format": "png",
+    "width": 1920,
+    "height": 1080
+  }
+}
+```
+
+**Response:**
+```json
+{
+  "status": "ok",
+  "imageId": "img-789",
+  "filename": "uuid_macAddress_img-789_timestamp.png",
+  "fileSize": 3562844,
+  "timestamp": "2026-01-28T10:00:00Z"
+}
+```
+
+#### Delete Image
+```http
+DELETE /images/:userUuid/:macAddress/:imageId
+```
+
+**Response:**
+```json
+{
+  "status": "ok",
+  "message": "Image deleted successfully"
+}
+```
 
 ## MQTT Topic Structure
 
@@ -315,11 +380,20 @@ My Device Name
 {
   "name": "My Device Name",
   "macAddress": "00_11_22_33_44_55",
-  "status": "created|existing|reassigned|error",
+  "status": "created|reassigned|reassigned_from_db|name_updated|unchanged|synced|error",
   "timestamp": "2026-01-22T10:15:00Z",
   "error": "Error message (only if status is error)"
 }
 ```
+
+**Status Values:**
+- `created`: New device successfully registered
+- `reassigned`: Device transferred from another user
+- `reassigned_from_db`: Device found in database and transferred
+- `name_updated`: Device name updated
+- `unchanged`: Device already exists with same name
+- `synced`: Device found in database and synced to memory
+- `error`: Registration failed
 
 **Example Registration Flow:**
 ```bash
@@ -407,9 +481,9 @@ mosquitto_sub -h localhost -u <userUuid> -P <password> \
 {
   "imageId": "img-789",
   "messageId": "msg-img-789",
-  "data": "<base64-encoded-image>",
+  "imageData": "<base64-encoded-image>",
   "metadata": {
-    "contentType": "image/jpeg",
+    "format": "jpeg",
     "width": 1920,
     "height": 1080,
     "camera": "CameraModel"
@@ -421,7 +495,7 @@ mosquitto_sub -h localhost -u <userUuid> -P <password> \
 ```bash
 mosquitto_pub -h localhost -u <userUuid> -P <password> \
   -t "/<userUuid>/devices/<macAddress>/images" \
-  -m '{"imageId":"img-789","messageId":"msg-img-789","data":"'$(base64 -w 0 image.jpg)'","metadata":{"contentType":"image/jpeg"}}'
+  -m '{"imageId":"img-789","messageId":"msg-img-789","imageData":"'$(base64 -w 0 image.jpg)'","metadata":{"format":"jpeg"}}'
 ```
 
 Images are stored in the Docker volume `images_storage` and served via the API.
@@ -463,14 +537,19 @@ Stores user accounts with authentication credentials.
 | created_at | TIMESTAMPTZ | Account creation timestamp |
 
 #### devices
-Stores IoT devices owned by users.
+Stores IoT devices owned by users. Supports device ownership transfers while preserving historical data.
 
 | Column | Type | Description |
 |--------|------|-------------|
-| id | VARCHAR(255) | Device identifier (primary key) |
-| user_uuid | VARCHAR(255) | Foreign key to users.uuid |
+| mac_address | VARCHAR(255) | Device MAC address (part of composite primary key) |
+| user_uuid | VARCHAR(255) | Foreign key to users.uuid (part of composite primary key) |
 | name | VARCHAR(255) | Device display name |
-| created_at | TIMESTAMPTZ | Device registration timestamp |
+| active | BOOLEAN | Whether device is currently owned by this user (default: TRUE) |
+| created_at | TIMESTAMPTZ | Device registration timestamp (default: NOW()) |
+
+**Primary Key:** Composite key `(mac_address, user_uuid)` allows tracking device ownership history.  
+**Unique Constraint:** Only one entry per device can have `active = TRUE` (enforced by unique index).  
+**Foreign Key:** `user_uuid` references `users(uuid)` with CASCADE delete.
 
 #### telemetry
 Stores time series telemetry data from IoT devices.
@@ -478,28 +557,36 @@ Stores time series telemetry data from IoT devices.
 | Column | Type | Description |
 |--------|------|-------------|
 | id | SERIAL | Primary key |
-| user_uuid | VARCHAR(255) | User identifier |
-| device_id | VARCHAR(255) | Device identifier |
-| device_name | VARCHAR(255) | Device display name |
-| sensor_name | VARCHAR(255) | Sensor identifier |
-| message | TEXT | Raw message content |
-| value | NUMERIC | Parsed numeric value |
-| unit | VARCHAR(50) | Unit of measurement |
-| timestamp | TIMESTAMPTZ | Data timestamp |
-| message_id | VARCHAR(255) | Optional message tracking ID |
-| created_at | TIMESTAMPTZ | Database insertion timestamp |
+| user_uuid | VARCHAR(255) | User identifier (NOT NULL, references users.uuid) |
+| device_mac_address | VARCHAR(255) | Device MAC address (NOT NULL) |
+| device_name | VARCHAR(255) | Device display name (nullable) |
+| sensor_name | VARCHAR(255) | Sensor identifier (nullable) |
+| message | TEXT | Raw message content (NOT NULL) |
+| value | NUMERIC | Parsed numeric value (nullable) |
+| unit | VARCHAR(50) | Unit of measurement (nullable) |
+| timestamp | TIMESTAMPTZ | Data timestamp (default: NOW()) |
+| message_id | VARCHAR(255) | Optional message tracking ID for acknowledgments |
+| created_at | TIMESTAMPTZ | Database insertion timestamp (default: NOW()) |
+
+**Foreign Keys:** 
+- `user_uuid` references `users(uuid)` with CASCADE delete
+- `(device_mac_address, user_uuid)` references `devices(mac_address, user_uuid)` with CASCADE delete
 
 #### alarms
 Stores alarm and alert events from IoT devices.
+(NOT NULL, references users.uuid) |
+| device_mac_address | VARCHAR(255) | Device MAC address (NOT NULL) |
+| device_name | VARCHAR(255) | Device display name (nullable) |
+| severity | VARCHAR(20) | Alarm severity: critical, warning, info (default: 'info') |
+| message | TEXT | Alarm message (NOT NULL) |
+| acknowledged | BOOLEAN | Acknowledgment status (default: FALSE) |
+| acknowledged_at | TIMESTAMPTZ | Acknowledgment timestamp (nullable) |
+| timestamp | TIMESTAMPTZ | Alarm timestamp (default: NOW()) |
+| created_at | TIMESTAMPTZ | Database insertion timestamp (default: NOW()) |
 
-| Column | Type | Description |
-|--------|------|-------------|
-| id | SERIAL | Primary key |
-| user_uuid | VARCHAR(255) | User identifier |
-| device_id | VARCHAR(255) | Device identifier |
-| device_name | VARCHAR(255) | Device display name |
-| severity | VARCHAR(20) | Alarm severity (info/warning/critical) |
-| message | TEXT | Alarm message |
+**Foreign Keys:**
+- `user_uuid` references `users(uuid)` with CASCADE delete
+- `(device_mac_address, user_uuid)` references `devices(mac_address, user_uuid)` with CASCADE delete
 | acknowledged | BOOLEAN | Acknowledgment status |
 | acknowledged_at | TIMESTAMPTZ | Acknowledgment timestamp |
 | timestamp | TIMESTAMPTZ | Alarm timestamp |
@@ -507,21 +594,44 @@ Stores alarm and alert events from IoT devices.
 
 #### images
 Stores images captured by IoT devices.
-
-| Column | Type | Description |
-|--------|------|-------------|
-| id | SERIAL | Primary key |
-| user_uuid | VARCHAR(255) | User identifier |
-| device_id | VARCHAR(255) | Device identifier |
-| device_name | VARCHAR(255) | Device display name |
-| image_id | VARCHAR(255) | Image identifier |
-| image_data | TEXT | Base64 data (deprecated, nullable) |
-| file_path | VARCHAR(500) | Path to image file in storage |
+(NOT NULL, references users.uuid) |
+| device_mac_address | VARCHAR(255) | Device MAC address (NOT NULL) |
+| device_name | VARCHAR(255) | Device display name (nullable) |
+| image_id | VARCHAR(255) | Image identifier (NOT NULL) |
+| image_data | TEXT | Base64 encoded image data (deprecated, use file_path) |
+| file_path | VARCHAR(500) | Path to image file in storage bucket |
 | file_size | BIGINT | File size in bytes |
-| metadata | JSONB | Image metadata (format, dimensions, camera) |
-| timestamp | TIMESTAMPTZ | Image capture timestamp |
-| message_id | VARCHAR(255) | Optional message tracking ID |
-| created_at | TIMESTAMPTZ | Database insertion timestamp |
+| metadata | JSONB | Image metadata (format, dimensions, camera settings, etc.) |
+| timestamp | TIMESTAMPTZ | Image capture timestamp (default: NOW()) |
+| message_id | VARCHAR(255) | Optional message tracking ID (nullable) |
+| created_at | TIMESTAMPTZ | Database insertion timestamp (default: NOW()) |
+
+**Foreign Keys:**
+- `user_uuid` references `users(uuid)` with CASCADE delete
+Optimized indexes for query performance:
+
+**Devices:**
+- `idx_devices_user` on `(user_uuid)`
+- `idx_devices_active` on `(user_uuid, active)`
+- `idx_devices_mac_active` on `(mac_address, active)`
+- `idx_devices_mac_active_unique` unique on `(mac_address)` WHERE `active = TRUE`
+
+**Telemetry:**
+- `idx_telemetry_user_device` on `(user_uuid, device_mac_address)`
+- `idx_telemetry_timestamp` on `(timestamp DESC)`
+- `idx_telemetry_sensor` on `(user_uuid, device_mac_address, sensor_name)`
+- `idx_telemetry_message_id` on `(message_id)`
+
+**Alarms:**
+- `idx_alarms_user_device` on `(user_uuid, device_mac_address)`
+- `idx_alarms_timestamp` on `(timestamp DESC)`
+- `idx_alarms_acknowledged` on `(acknowledged)`
+
+**Images:**
+- `idx_images_user_device` on `(user_uuid, device_mac_address)`
+- `idx_images_timestamp` on `(timestamp DESC)`
+- `idx_images_image_id` on `(image_id)`
+- `idx_images_file_path` on `(file_path)`base insertion timestamp |
 
 ### Indexes
 
